@@ -141,8 +141,8 @@ function suppressPageAlerts() {
     // 1) Mid-pipeline session transition (Dropzone -> Edit form, or Design N -> Design N+1)
     // 2) Explicitly triggered from Popup within the last 30 seconds
     const sessionToken = sessionStorage.getItem("TP_AUTOPILOT_ACTIVE_SESSION");
-    const isMidPipeline = Boolean(sessionToken && (Date.now() - parseInt(sessionToken, 10) < 180000));
-    const isRecentPopupTrigger = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 30000));
+    const isMidPipeline = Boolean(sessionToken && (Date.now() - parseInt(sessionToken, 10) < 1800000));
+    const isRecentPopupTrigger = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 60000));
 
     if (store.pendingAutoList && (isMidPipeline || isRecentPopupTrigger)) {
       await chrome.storage.local.set({ triggeredByPopupTimestamp: 0 });
@@ -347,9 +347,11 @@ async function executeMasterWorkflow(advanceNext = false) {
       const localBlobUrls = [];
       const totalUploadCount = designs.length > 0 ? designs.length : 1;
 
-      updateTracker(2, 25, `Preparing batch upload of ${totalUploadCount} design(s)...`);
+      // Check if designs are ALREADY uploaded on the bulk uploader (e.g. user resumed or refreshed)
+      const alreadyUploaded = hasUploadedArtworks();
 
-      if (fileInput) {
+      if (!alreadyUploaded && fileInput) {
+        updateTracker(2, 25, `Preparing batch upload of ${totalUploadCount} design(s)...`);
         if (dropzone) dropzone.classList.add("tp-section-glow");
 
         const dt = new DataTransfer();
@@ -412,6 +414,8 @@ async function executeMasterWorkflow(advanceNext = false) {
 
         await sleep(800);
         if (dropzone) dropzone.classList.remove("tp-section-glow");
+      } else if (alreadyUploaded) {
+        showToast("✓ Artwork designs already present on page. Watching for Get Started...", "info", 2500);
       }
 
       // Keep pending flag & session token so on the next page it resumes automatically!
@@ -440,8 +444,11 @@ async function executeMasterWorkflow(advanceNext = false) {
 
       // Verify that TeePublic has actually rendered uploaded artwork elements in DOM
       function hasUploadedArtworks() {
-        const imgs = document.querySelectorAll('.jsBulkUploaderImages img, .current img');
-        return imgs.length > 0;
+        const imgs = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage, .img_holder img');
+        if (imgs.length > 0) return true;
+        const dropText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message')?.textContent || '');
+        if (dropText.includes('Uploads complete') || dropText.includes('Get Started')) return true;
+        return false;
       }
 
       // Easily & reliably recognize whichever Get Started button is genuinely visible
@@ -451,26 +458,36 @@ async function executeMasterWorkflow(advanceNext = false) {
           return null;
         }
 
+        // 1. S3 Bulk Submit Button (TeePublic's modern uploader)
+        const s3Btn = document.querySelector('.jsS3BulkUploaderSubmit');
         const s3Cont = document.querySelector('.jsS3BulkUploaderSubmitContainer');
+        if (s3Btn) {
+          const s3ContStyle = s3Cont ? window.getComputedStyle(s3Cont) : null;
+          const btnStyle = window.getComputedStyle(s3Btn);
+          if ((!s3ContStyle || s3ContStyle.display !== 'none') && btnStyle.display !== 'none' && s3Btn.offsetHeight > 0) {
+            return { btn: s3Btn, type: 's3' };
+          }
+        }
+
+        // 2. Regular Bulk Submit Button
+        const bulkBtn = document.querySelector('.jsBulkUploaderSubmit');
         const bulkCont = document.querySelector('.jsBulkUploaderSubmitContainer');
-
-        if (s3Cont && window.getComputedStyle(s3Cont).display !== 'none' && s3Cont.offsetHeight > 0) {
-          const btn = s3Cont.querySelector('.jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button, .btn');
-          if (btn) return { btn: btn, type: 's3' };
+        if (bulkBtn) {
+          const bulkContStyle = bulkCont ? window.getComputedStyle(bulkCont) : null;
+          const btnStyle = window.getComputedStyle(bulkBtn);
+          if ((!bulkContStyle || bulkContStyle.display !== 'none') && btnStyle.display !== 'none' && bulkBtn.offsetHeight > 0) {
+            return { btn: bulkBtn, type: 'bulk' };
+          }
         }
 
-        if (bulkCont && window.getComputedStyle(bulkCont).display !== 'none' && bulkCont.offsetHeight > 0) {
-          const btn = bulkCont.querySelector('.jsBulkUploaderSubmit, .m-bulk-uploader__submit-button, .btn');
-          if (btn) return { btn: btn, type: 'bulk' };
-        }
-
-        const all = Array.from(document.querySelectorAll('.m-bulk-uploader__submit-button, .jsBulkUploaderSubmit, .jsS3BulkUploaderSubmit, [class*="BulkUploaderSubmit"], .btn--green, button'));
+        // 3. Fallback: Any visible element matching text "GET STARTED"
+        const all = Array.from(document.querySelectorAll('.m-bulk-uploader__submit-button, .jsBulkUploaderSubmit, .jsS3BulkUploaderSubmit, [class*="BulkUploaderSubmit"], .btn--green, button, div, a'));
         for (const el of all) {
-          const text = (el.innerText || el.textContent || '').trim().toUpperCase();
+          const text = (el.innerText || el.textContent || el.value || '').trim().toUpperCase();
           if (text === 'GET STARTED' || text.includes('GET STARTED')) {
             const elStyle = window.getComputedStyle(el);
             const parentStyle = el.parentElement ? window.getComputedStyle(el.parentElement) : null;
-            if (elStyle.display !== 'none' && (!parentStyle || parentStyle.display !== 'none') && el.offsetHeight > 0) {
+            if (elStyle.display !== 'none' && (!parentStyle || parentStyle.display !== 'none') && (el.offsetHeight > 0 || (el.parentElement && el.parentElement.offsetHeight > 0))) {
               const isS3 = el.classList.contains('jsS3BulkUploaderSubmit') || (el.parentElement && el.parentElement.classList.contains('jsS3BulkUploaderSubmitContainer'));
               return { btn: el, type: isS3 ? 's3' : 'bulk' };
             }
@@ -486,73 +503,84 @@ async function executeMasterWorkflow(advanceNext = false) {
         // 1. Isolated World native mouse & pointer events
         if (targetBtn) {
           targetBtn.classList.add("tp-sitemap-target-glow");
+          const evts = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+          for (const ev of evts) {
+            try { targetBtn.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window, buttons: 1, which: 1 })); } catch (_) {}
+          }
+          try { targetBtn.click(); } catch (_) {}
 
-          targetBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-          targetBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, buttons: 1 }));
-          targetBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-          targetBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-          targetBtn.click();
+          if (targetBtn.parentElement) {
+            for (const ev of evts) {
+              try { targetBtn.parentElement.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window, buttons: 1, which: 1 })); } catch (_) {}
+            }
+            try { targetBtn.parentElement.click(); } catch (_) {}
+          }
         }
 
-        // 2. Main Page World script injection (triggers TeePublic's jQuery .on('click') handlers)
-        const script = document.createElement('script');
-        script.textContent = `
-          (function() {
-            try {
-              if (window.jQuery) {
-                var $visible = window.jQuery('.jsBulkUploaderSubmitContainer:visible .jsBulkUploaderSubmit, .jsS3BulkUploaderSubmitContainer:visible .jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button:visible');
-                if ($visible.length > 0) {
-                  $visible.each(function() {
-                    window.jQuery(this).trigger('click');
-                  });
-                } else {
-                  window.jQuery('.jsBulkUploaderSubmit').trigger('click');
+        // 2. Main Page World script injection (triggers TeePublic's jQuery .on('click') handlers & direct S3 session AJAX)
+        try {
+          const script = document.createElement('script');
+          script.textContent = `
+            (function() {
+              try {
+                if (window.jQuery) {
+                  window.jQuery('.jsS3BulkUploaderSubmitContainer').show();
+                  window.jQuery('.jsBulkUploaderSubmitContainer').show();
                   window.jQuery('.jsS3BulkUploaderSubmit').trigger('click');
+                  window.jQuery('.jsBulkUploaderSubmit').trigger('click');
+                  window.jQuery('.m-bulk-uploader__submit-button').trigger('click');
                 }
-              }
 
-              // Direct Session API Failsafe (for S3-based flow)
-              if (window.jQuery && window.location.pathname.includes('bulk_uploader')) {
-                var ids = [];
-                window.jQuery('.jsBulkUploaderImages img').each(function() {
-                  var dId = window.jQuery(this).attr('data-design-id') || window.jQuery(this).data('design_id');
-                  if (dId && !isNaN(Number(dId))) ids.push(Number(dId));
+                var domBtns = document.querySelectorAll('.jsS3BulkUploaderSubmit, .jsBulkUploaderSubmit, .m-bulk-uploader__submit-button, .btn--green');
+                domBtns.forEach(function(b) {
+                  try { b.click(); } catch(e) {}
                 });
-                if (ids.length > 0) {
-                  var meta = document.querySelector('meta[name="csrf-token"]');
-                  var csrf = meta && meta.getAttribute('content');
-                  window.jQuery.ajax({
-                    url: '/design/s3_bulk_uploader',
-                    type: 'POST',
-                    contentType: 'application/json; charset=UTF-8',
-                    data: JSON.stringify({ design_ids: ids }),
-                    headers: { 'X-CSRF-Token': csrf },
-                    success: function() {
-                      window.location.assign('/designs/' + ids[0] + '/edit');
-                    }
+
+                // Direct Session API Failsafe (for S3-based flow)
+                if (window.jQuery && window.location.pathname.includes('bulk_uploader')) {
+                  var ids = [];
+                  window.jQuery('.jsBulkUploaderImages img, .current img').each(function() {
+                    var dId = window.jQuery(this).attr('data-design-id') || window.jQuery(this).data('design_id');
+                    if (dId && !isNaN(Number(dId))) ids.push(Number(dId));
                   });
+                  if (ids.length > 0) {
+                    var meta = document.querySelector('meta[name="csrf-token"]');
+                    var csrf = meta && meta.getAttribute('content');
+                    window.jQuery.ajax({
+                      url: '/design/s3_bulk_uploader',
+                      type: 'POST',
+                      contentType: 'application/json; charset=UTF-8',
+                      data: JSON.stringify({ design_ids: ids }),
+                      headers: { 'X-CSRF-Token': csrf },
+                      success: function() {
+                        window.location.assign('/designs/' + ids[0] + '/edit');
+                      }
+                    });
+                  }
                 }
+              } catch (err) {
+                console.warn('[Autopilot Page World Click Error]', err);
               }
-            } catch (err) {
-              console.warn('[Autopilot Page World Click Error]', err);
-            }
-          })();
-        `;
-        (document.head || document.documentElement).appendChild(script);
-        script.remove();
+            })();
+          `;
+          (document.head || document.documentElement).appendChild(script);
+          script.remove();
+        } catch (_) {}
       }
 
-      updateTracker(3, 40, `Uploading ${totalUploadCount} design(s)... Watching for completion`);
-      showToast(`⏳ Uploading ${totalUploadCount} design(s)... TeePublic processing uploads...`, "info", 3000);
+      updateTracker(3, 35, `Processing ${totalUploadCount} design upload(s)... Watching for Get Started button`);
+      showToast(`⏳ Watching for TeePublic upload completion...`, "info", 3000);
 
       let detectedBtnObj = null;
-      for (let attempt = 0; attempt < 180; attempt++) {
+
+      // Generous 10-minute timeout (1200 * 500ms = 600s) for slow Tor relays & large batches
+      for (let attempt = 0; attempt < 1200; attempt++) {
         ensureThumbnailsVisible();
         window.scrollTo({ top: 0, behavior: 'instant' });
 
-        const uploadedCount = document.querySelectorAll('.jsBulkUploaderImages img, .current img').length;
+        const uploadedCount = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage').length;
         if (uploadedCount > 0) {
-          const pct = Math.min(58, 40 + Math.round((uploadedCount / totalUploadCount) * 18));
+          const pct = Math.min(58, 35 + Math.round((uploadedCount / totalUploadCount) * 23));
           updateTracker(3, pct, `TeePublic uploaded ${uploadedCount}/${totalUploadCount} design(s)...`);
         }
 
@@ -560,6 +588,17 @@ async function executeMasterWorkflow(advanceNext = false) {
         if (detectedBtnObj) {
           break;
         }
+
+        // Also check if TeePublic dropzone text says uploads are complete
+        const dropzoneText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message')?.textContent || '');
+        if (dropzoneText.includes('Uploads complete') || dropzoneText.includes('Get Started')) {
+          const s3Btn = document.querySelector('.jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button, .jsBulkUploaderSubmit');
+          if (s3Btn) {
+            detectedBtnObj = { btn: s3Btn, type: 's3' };
+            break;
+          }
+        }
+
         await sleep(500);
       }
 
@@ -572,29 +611,26 @@ async function executeMasterWorkflow(advanceNext = false) {
         if (detectedBtnObj.btn) {
           detectedBtnObj.btn.classList.add("tp-sitemap-target-glow");
         }
-        await sleep(300);
+        await sleep(250);
 
-        // Force click Get Started smoothly & reliably!
-        forceClickGetStarted(detectedBtnObj);
-
-        // Resilient redirection watcher: wait up to 45 seconds for TeePublic's backend polling and redirect
+        // Continuous clicking watcher: repeat every 800ms until redirection away from bulk_uploader
         updateTracker(3, 62, "Processing design batch... Redirecting to listing editor in a moment");
         showToast("⏳ Processing design batch... Waiting for listing editor to load...", "info", 3000);
 
-        for (let wait = 0; wait < 90; wait++) {
-          await sleep(500);
+        for (let wait = 0; wait < 120; wait++) {
+          forceClickGetStarted(detectedBtnObj);
+          await sleep(800);
           window.scrollTo({ top: 0, behavior: 'instant' });
+
           if (!window.location.pathname.includes("bulk_uploader")) {
             // Already navigated away from bulk_uploader to /designs/.../edit!
             return;
           }
 
-          // If still on bulk_uploader, re-click every 2.5 seconds until redirect initiates
-          if (wait > 0 && wait % 5 === 0) {
-            const stillVisible = findVisibleGetStartedButton();
-            if (stillVisible) {
-              forceClickGetStarted(stillVisible);
-            }
+          // If still on bulk_uploader, re-scan for button and retry
+          const refreshed = findVisibleGetStartedButton();
+          if (refreshed) {
+            detectedBtnObj = refreshed;
           }
         }
 
@@ -805,12 +841,12 @@ async function humanType(el, text, toastMsg) {
 }
 
 // ===================================================================
-// SUPPORTING TAGS WITH LIVE AUTOCOMPLETE SELECTION
+// SUPPORTING TAGS WITH 100% STUDIO FIDELITY (ZERO SKIPPED TAGS)
 // ===================================================================
 
 async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
   if (!suppTagsVal) return;
-  updateTracker(4, 74, "Adding Supporting Tags from TeePublic Suggestions...");
+  updateTracker(4, 74, "Adding Supporting Tags from Studio...");
 
   const secTagsContainer = document.querySelector('#secondary_tags');
   if (secTagsContainer) {
@@ -818,67 +854,140 @@ async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
     secTagsContainer.classList.add("tp-field-active");
   }
 
-  const tags = suppTagsVal.split(",").map(t => t.trim()).filter(Boolean);
+  // Parse studio tags (clean hashtags, trim whitespace)
+  const tags = suppTagsVal.split(",")
+    .map(t => t.trim().replace(/^#+/, ''))
+    .filter(Boolean);
+
+  if (tags.length === 0) return;
+
+  // 1. Page-world cleanup: clear pre-existing generic tags so only studio tags exist
+  try {
+    const clearScript = document.createElement("script");
+    clearScript.textContent = `
+      (function() {
+        try {
+          if (window.secondaryTagsForm && typeof window.secondaryTagsForm.removeAll === 'function') {
+            window.secondaryTagsForm.removeAll();
+          }
+        } catch (_) {}
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(clearScript);
+    clearScript.remove();
+  } catch (_) {}
+
+  await sleep(200);
+
+  // 2. Add each studio tag one by one with live visual feedback
   let addedCount = 0;
 
   for (let idx = 0; idx < tags.length; idx++) {
     const tag = tags[idx];
-    const secInput = document.querySelector('#secondary_tags input, #secondary_tags textarea, input[name*="secondary" i]');
+    const secInput = document.querySelector('#secondary_tags input.taggle_input, #secondary_tags input, #secondary_tags textarea');
 
     if (secInput) {
       secInput.focus();
       secInput.value = "";
 
-      // Type the tag characters
+      // Smooth visual typing simulation for human review
       for (let c = 0; c < tag.length; c++) {
         secInput.value += tag[c];
         secInput.dispatchEvent(new Event("input", { bubbles: true }));
-        secInput.dispatchEvent(new KeyboardEvent("keydown", { key: tag[c], bubbles: true }));
-        secInput.dispatchEvent(new KeyboardEvent("keyup", { key: tag[c], bubbles: true }));
+        if (c % 2 === 0) await sleep(15);
       }
+      secInput.dispatchEvent(new Event("change", { bubbles: true }));
 
-      // If jQuery UI autocomplete is attached, trigger search for suggestions
-      if (window.$ && $(secInput).data("ui-autocomplete")) {
-        try {
-          $(secInput).autocomplete("search", tag.slice(0, Math.max(4, tag.length)));
-        } catch (_) {}
-      }
-
-      // Wait up to 500ms for suggestion dropdown item to render
-      let chosenSuggestion = null;
-      for (let wait = 0; wait < 5; wait++) {
-        await sleep(100);
-        const items = Array.from(document.querySelectorAll('#secondary_tags ul.ui-autocomplete li.ui-menu-item, ul.ui-autocomplete li.ui-menu-item, .ui-menu-item-wrapper'));
-        if (items.length > 0) {
-          chosenSuggestion = items.find(it => (it.textContent || "").trim().toLowerCase() === tag.toLowerCase()) || items[0];
+      // Check if autocomplete shows an EXACT match for this tag
+      let exactMatchFound = false;
+      const autoItems = Array.from(document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item, .ui-menu-item-wrapper'));
+      for (const item of autoItems) {
+        const itemText = (item.textContent || "").trim().toLowerCase();
+        if (itemText === tag.toLowerCase()) {
+          exactMatchFound = true;
+          try {
+            item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, which: 1 }));
+            item.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, which: 1 }));
+            item.click();
+          } catch (_) {}
           break;
         }
       }
 
-      if (chosenSuggestion) {
-        chosenSuggestion.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-        chosenSuggestion.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, which: 1 }));
-        chosenSuggestion.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, which: 1 }));
-        chosenSuggestion.click();
-        showToast(`✓ Tag from suggestion: "${tag}"`, "info", 600);
-      } else {
-        // Fallback: Trigger Enter key or direct Taggle add
-        secInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, which: 13, bubbles: true }));
-        secInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", keyCode: 13, which: 13, bubbles: true }));
-        if (window.secondaryTagsForm && typeof window.secondaryTagsForm.add === "function") {
-          try { window.secondaryTagsForm.add(tag); } catch (_) {}
-        }
+      // If no exact match clicked, add directly via Taggle API + native comma/enter keypresses
+      if (!exactMatchFound) {
+        // Press Comma & Enter on the Taggle input
+        secInput.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
+        secInput.dispatchEvent(new KeyboardEvent("keypress", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
+        secInput.dispatchEvent(new KeyboardEvent("keyup", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
+
+        secInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        secInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        secInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+
+        // Primary Injection: Invoke Taggle's official .add(tag) method in page world
+        try {
+          const addScript = document.createElement("script");
+          addScript.textContent = `
+            (function() {
+              try {
+                if (window.secondaryTagsForm && typeof window.secondaryTagsForm.add === 'function') {
+                  window.secondaryTagsForm.add(${JSON.stringify(tag)});
+                }
+                if (window.jQuery) {
+                  window.jQuery('ul.ui-autocomplete').hide();
+                }
+              } catch (_) {}
+            })();
+          `;
+          (document.head || document.documentElement).appendChild(addScript);
+          addScript.remove();
+        } catch (_) {}
+      }
+
+      // Hide autocomplete menu so it doesn't obstruct the screen
+      try {
+        const closeAuto = document.createElement("script");
+        closeAuto.textContent = `if (window.jQuery) { window.jQuery('ul.ui-autocomplete').hide(); }`;
+        (document.head || document.documentElement).appendChild(closeAuto);
+        closeAuto.remove();
+      } catch (_) {}
+
+      await sleep(150);
+
+      // Verify DOM: Ensure hidden input <input type="hidden" name="design[secondary_tags][]" value="tag"> exists!
+      const existingHiddenInputs = Array.from(document.querySelectorAll('#secondary_tags input[name="design[secondary_tags][]"]'));
+      const alreadyHasHidden = existingHiddenInputs.some(inp => inp.value.toLowerCase() === tag.toLowerCase());
+
+      if (!alreadyHasHidden && secTagsContainer) {
+        // Fallback DOM injection: Guarantee that the hidden input exists for form submission!
+        const hiddenInp = document.createElement("input");
+        hiddenInp.type = "hidden";
+        hiddenInp.name = "design[secondary_tags][]";
+        hiddenInp.value = tag;
+        secTagsContainer.appendChild(hiddenInp);
+
+        // Visual tag chip
+        const list = secTagsContainer.querySelector("ul.taggle_list, ul") || secTagsContainer;
+        const chip = document.createElement("li");
+        chip.className = "taggle";
+        chip.innerHTML = `<span class="taggle_text">${escapeHtml(tag)}</span><a href="javascript:void(0)" class="close">&times;</a>`;
+        list.insertBefore(chip, list.firstChild);
       }
 
       addedCount++;
       const currentPct = 74 + Math.round((addedCount / tags.length) * 8);
       updateTracker(4, Math.min(82, currentPct), `Added Tag (${addedCount}/${tags.length}): "${tag}"`);
-      await sleep(300); // Give TeePublic time to register tag chip
+      showToast(`✓ Tag [${addedCount}/${tags.length}]: "${tag}"`, "info", 600);
+      await sleep(200);
     }
   }
 
+  // Final validation & report
+  const appliedTags = Array.from(document.querySelectorAll('#secondary_tags input[name="design[secondary_tags][]"]')).map(el => el.value);
+  showToast(`✓ All ${appliedTags.length} Studio Tags Applied!`, "success", 2000);
+
   if (secTagsContainer) {
-    await sleep(200);
     secTagsContainer.classList.remove("tp-field-active");
     secTagsContainer.classList.add("tp-field-success");
     setTimeout(() => secTagsContainer.classList.remove("tp-field-success"), 1000);
