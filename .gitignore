@@ -1,0 +1,49 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# Scratch & test folders
+scratch/
+uploads/*
+!uploads/.gitkeep
+
+# Temporary / extracted HTML & dumps (keep ui/ and extension/)
+*.html
+!ui/index.html
+!extension/popup.html
+uploader_bundle.js
+*.bin
+*.log
+*.tmp
+
+# Temporary root debug screenshots (preserve ui and extension icons)
+/*.png
+/*.jpg
+/*.jpeg
+!ui/*.png
+!extension/icons/*.png
+
+# Ad-hoc inspection and scratch test scripts
+test_*.py
+verify_*.py
+inspect_*.py
+find_*.py
+analyze_*.py
+debug_*.py
+extract_*.py
+take_live_screenshot.py
+
+# OS / Editor artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

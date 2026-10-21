@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Magic Fabrica Studio — TeePublic Bulk Uploader</title>
+  <!-- Official Magic Fabrica Typography: Space Grotesk (Headings & Buttons) and Inter (Body & Inputs) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- =============================================================== -->
+  <!-- PHANTOM ARC AURA BACKGROUND SYSTEM                              -->
+  <!-- =============================================================== -->
+  <div class="aura-container aura-bg-host" aria-hidden="true">
+    <div class="aura-layer aura-layer-1"></div>
+    <div class="aura-layer aura-layer-2"></div>
+    <div class="aura-layer aura-layer-3"></div>
+  </div>
+
+  <!-- Hidden File Inputs (Browser-Native, Multi-Select, Zero Barriers) -->
+  <input type="file" id="csvFileInput" multiple accept=".csv,text/csv,application/vnd.ms-excel,text/plain" style="display: none;">
+  <input type="file" id="folderFileInput" multiple accept="image/*,.png,.jpg,.jpeg,.webp,.bmp,.svg,.gif,.tif,.tiff,.jfif,.PNG,.JPG,.JPEG,.WEBP" style="display: none;">
+  <input type="file" id="singleImageInput" multiple accept="image/*,.png,.jpg,.jpeg,.webp,.bmp,.svg,.gif,.tif,.tiff,.jfif,.PNG,.JPG,.JPEG,.WEBP" style="display: none;">
+
+  <!-- Fullscreen Drag & Drop Zone Overlay with Ctrl+V support -->
+  <div id="globalDropOverlay" class="global-drop-overlay">
+    <div class="drop-zone-modal">
+      <div class="drop-zone-icon-ring">
+        <svg data-lucide="cloud-upload" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+          <path d="M12 12v9"></path>
+          <path d="m16 16-4-4-4 4"></path>
+        </svg>
+      </div>
+      <h2 class="drop-zone-title">Drop Files or Folders Here</h2>
+      <p class="drop-zone-desc">Drop your CSV listings, artwork images (PNG, JPG, WEBP), or complete folders.<br>Items will be imported and matched immediately with real-time feedback!</p>
+      <div class="drop-zone-badges">
+        <span class="drop-badge">📄 CSV Listings</span>
+        <span class="drop-badge">🎨 Artwork Images</span>
+        <span class="drop-badge">📁 Entire Folders</span>
+        <span class="drop-badge drop-badge-paste"><kbd>Ctrl+V</kbd> Direct Clipboard Paste</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- =============================================================== -->
+  <!-- TOP HEADER BAR (56px Sticky Bar)                                -->
+  <!-- =============================================================== -->
+  <header class="top-bar">
+    <div class="top-bar-left">
+      <!-- Magic Fabrica Logo Badge with Signature Rim Glow -->
+      <div class="brand-badge-wrapper" title="Magic Fabrica Studio">
+        <div class="brand-badge mf-logo-badge">
+          <img src="logo.png" alt="Magic Fabrica Logo" class="mf-logo-img" />
+        </div>
+      </div>
+
+      <div class="brand-info">
+        <div class="brand-title-row">
+          <h1 class="brand-title gradient-text">Magic Fabrica</h1>
+          <div class="status-indicator-pill" title="System Online & Ready">
+            <span class="status-dot-pulse"></span>
+            <span class="status-text">Ready</span>
+          </div>
+        </div>
+        <span class="brand-sub">TeePublic Bulk Uploader — Studio Edition</span>
+      </div>
+
+      <!-- Mode Switcher (Listings vs Designs) -->
+      <nav class="view-mode-nav" aria-label="View switch">
+        <button id="btnViewListings" class="view-mode-btn active" title="View CSV listings table">
+          <svg data-lucide="table" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path><path d="M12 3v18"></path>
+          </svg>
+          Listings
+        </button>
+        <button id="btnViewDesigns" class="view-mode-btn" title="View design artwork editor and garment previews">
+          <svg data-lucide="palette" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>
+          </svg>
+          Designs & Mockup
+        </button>
+      </nav>
+    </div>
+
+    <div class="top-bar-right">
+      <!-- Stat Counter Pills -->
+      <div class="stat-group">
+        <div class="stat-pill" title="Total listings loaded">
+          <span class="stat-label">Total</span>
+          <span class="stat-val" id="statTotal">0</span>
+        </div>
+        <div class="stat-pill stat-matched" title="Designs confirmed with artwork">
+          <span class="stat-label">Confirmed</span>
+          <span class="stat-val" id="statMatched">0</span>
+        </div>
+        <div class="stat-pill stat-missing" title="Listings awaiting image upload">
+          <span class="stat-label">Awaiting Image</span>
+          <span class="stat-val" id="statMissing">0</span>
+        </div>
+      </div>
+
+      <!-- Micro-Pill Action Buttons (28px height with 4px left gradient stripe) -->
+      <div class="action-buttons">
+        <button id="btnRefreshState" class="micro-pill-btn" title="Re-scan artwork and synchronize studio state">
+          <svg data-lucide="refresh-cw" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path>
+          </svg>
+          Sync
+        </button>
+
+        <button id="btnPageRefresh" class="micro-pill-btn" title="Refresh application and reload studio">
+          <svg data-lucide="rotate-ccw" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+            <path d="M3 3v5h5"></path>
+          </svg>
+          Refresh
+        </button>
+
+        <button id="btnImportCSV" class="micro-pill-btn" title="Import CSV listings file(s)">
+          <svg data-lucide="file-spreadsheet" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M8 13h2"></path><path d="M14 13h2"></path><path d="M8 17h2"></path><path d="M14 17h2"></path>
+          </svg>
+          Import CSV
+        </button>
+
+        <button id="btnImportFolder" class="micro-pill-btn" title="Import design artwork images (PNG, JPG, WEBP, etc.)">
+          <svg data-lucide="image" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+          </svg>
+          Import Images
+        </button>
+
+        <button id="btnDeleteAll" class="micro-pill-btn micro-pill-danger" title="Clear all listings and start fresh">
+          <svg data-lucide="trash-2" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+          </svg>
+          Clear
+        </button>
+
+        <!-- Theme Toggle Button -->
+        <button id="btnThemeToggle" class="theme-toggle-btn" title="Toggle Dark / Light Theme" aria-label="Theme toggle">
+          <svg class="theme-icon-dark" data-lucide="moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+          </svg>
+          <svg class="theme-icon-light" data-lucide="sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+            <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- =============================================================== -->
+  <!-- APP SHELL CONTAINER (Sidebar Nav Rail + Main Viewport)          -->
+  <!-- =============================================================== -->
+  <div class="app-body-container">
+    <!-- ============================================================= -->
+    <!-- SIDEBAR NAV RAIL (72px fixed, expands on hover to 240px)      -->
+    <!-- ============================================================= -->
+    <nav class="sidebar-nav-rail" id="sidebarNavRail" aria-label="Control Navigation">
+      <div class="nav-rail-group nav-rail-top">
+        <!-- Listings Item -->
+        <button class="nav-rail-item active" id="railNavListings" title="CSV Listings">
+          <div class="nav-rail-target">
+            <svg data-lucide="table" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path><path d="M12 3v18"></path>
+            </svg>
+          </div>
+          <span class="nav-rail-label">Listings</span>
+        </button>
+
+        <!-- Designs & Mockup Item -->
+        <button class="nav-rail-item" id="railNavDesigns" title="Designs & Mockup Studio">
+          <div class="nav-rail-target">
+            <svg data-lucide="palette" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>
+            </svg>
+          </div>
+          <span class="nav-rail-label">Designs & Mockup</span>
+        </button>
+      </div>
+
+      <div class="nav-rail-group nav-rail-bottom">
+        <!-- Activity Terminal Toggle Item -->
+        <button class="nav-rail-item" id="railNavTerminal" title="Toggle Activity Terminal">
+          <div class="nav-rail-target">
+            <svg data-lucide="terminal" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 17 10 11 4 5"></polyline><line x1="12" x2="20" y1="19" y2="19"></line>
+            </svg>
+          </div>
+          <span class="nav-rail-label">Activity Log</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- ============================================================= -->
+    <!-- MAIN APPLICATION CONTAINER                                    -->
+    <!-- ============================================================= -->
+    <main class="main-layout">
+      <!-- =========================================================== -->
+      <!-- SECTION 1: LISTINGS VIEW                                    -->
+      <!-- =========================================================== -->
+      <section class="view-section active luxury-reveal-section" id="viewSectionListings">
+        <div class="section-two-col">
+          <!-- Left Sidebar: CSV File Info & Listings Queue -->
+          <aside class="sidebar-column glass-panel">
+            <div class="sidebar-header">
+              <div class="file-info-badge">
+                <span class="file-icon">📄</span>
+                <div class="file-details">
+                  <span class="file-name-label" id="sidebarCsvName">No CSV loaded</span>
+                  <span class="file-sub-label" id="sidebarCsvCount">0 rows</span>
+                </div>
+              </div>
+
+              <div class="filter-bar">
+                <button class="filter-tab active" data-filter="all">All</button>
+                <button class="filter-tab" data-filter="matched">Confirmed</button>
+                <button class="filter-tab" data-filter="missing">Awaiting Image</button>
+              </div>
+            </div>
+
+            <div class="items-list" id="listingsSidebarList">
+              <!-- Injected by app.js -->
+              <div class="empty-state">
+                <div class="empty-icon">📄</div>
+                <div class="empty-text">No listings imported</div>
+                <div class="empty-hint">Click <b>Import CSV</b> above or drop files here</div>
+              </div>
+            </div>
+          </aside>
+
+          <!-- Main Content Area: Listings Table -->
+          <div class="main-content-column glass-panel">
+            <div class="content-header">
+              <div>
+                <h2 class="content-heading">CSV Listings & Metadata</h2>
+                <span class="content-sub">Review imported listings and metadata approved from your CSV</span>
+              </div>
+              <button id="btnGoToDesigns" class="btn btn-primary" title="Switch to Design Editor & Mockups">
+                Open Design Editor ➔
+              </button>
+            </div>
+
+            <!-- Listings Table -->
+            <div class="table-container">
+              <table class="listings-table" id="listingsTable">
+                <thead>
+                  <tr>
+                    <th style="width: 65px;">Tracker</th>
+                    <th style="width: 220px;">Target Artwork Filename</th>
+                    <th style="width: 200px;">Listing Title</th>
+                    <th style="width: 140px;">Main Tag</th>
+                    <th>Supporting Tags</th>
+                    <th style="width: 110px;">Status</th>
+                    <th style="width: 110px; text-align: center;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="listingsTableBody">
+                  <!-- Injected dynamically by app.js -->
+                </tbody>
+              </table>
+              <div class="table-empty-notice" id="tableEmptyNotice">
+                <div class="empty-icon">📁</div>
+                <div class="empty-text">No listings data available</div>
+                <div class="empty-hint">Import a CSV file to inspect listings and match them against your artwork images</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================================== -->
+      <!-- SECTION 2: DESIGNS & MOCKUP VIEW (MerchGhost Design Editor)  -->
+      <!-- =========================================================== -->
+      <section class="view-section luxury-reveal-section" id="viewSectionDesigns">
+        <div class="section-two-col">
+          <!-- Left Sidebar: Design Cards Queue -->
+          <aside class="sidebar-column glass-panel">
+            <div class="sidebar-header">
+              <span class="sidebar-heading">Design Queue</span>
+              <div class="filter-bar">
+                <button class="filter-tab active" data-filter="all">All</button>
+                <button class="filter-tab" data-filter="matched">Confirmed</button>
+                <button class="filter-tab" data-filter="missing">Awaiting Image</button>
+              </div>
+            </div>
+
+            <div class="items-list" id="designsSidebarList">
+              <!-- Injected by app.js -->
+              <div class="empty-state">
+                <div class="empty-icon">🎨</div>
+                <div class="empty-text">No designs loaded</div>
+                <div class="empty-hint">Import CSV listings and upload artwork images</div>
+              </div>
+            </div>
+          </aside>
+
+          <!-- Main Content Area: MerchGhost Editor -->
+          <div class="main-content-column glass-panel">
+            <!-- Editor Subnav -->
+            <div class="editor-subnav">
+              <div class="subnav-left">
+                <button id="btnBackToListings" class="btn btn-secondary btn-sm" title="Return to CSV Listings">
+                  ⬅ Back to Listings
+                </button>
+                <div class="nav-pager">
+                  <button id="btnPrevDesign" class="btn-pager" title="Previous Design">◀</button>
+                  <div class="dot-pagination" id="dotPagination"></div>
+                  <button id="btnNextDesign" class="btn-pager" title="Next Design">▶</button>
+                </div>
+                <span class="tracker-badge" id="headerTrackerId">#01</span>
+                <span class="counter-badge" id="headerDesignCounter">Design 0 of 0</span>
+              </div>
+
+              <div class="subnav-right">
+                <span class="status-pill status-pill-neutral" id="headerStatusBadge">STANDBY</span>
+                <button id="btnCopySettingsAll" class="btn btn-primary-outline" title="Copy current Colors & Products settings to all designs">
+                  📋 Copy Settings to All
+                </button>
+              </div>
+            </div>
+
+            <!-- Main Design Editor Card (TeePublic Native Reverse-Engineered Studio) -->
+            <div class="design-editor-card tp-native-studio">
+              <!-- Top Banner -->
+              <div class="tp-warning-banner">
+                <span class="tp-warning-icon">⚠️</span>
+                <span>Your image isn't large enough to support all our Wall Art options. The largest size your image supports is Large (20" x 25").</span>
+              </div>
+
+              <div class="tp-requirements-box">
+                <strong style="display: block; margin-bottom: 3px;">File Requirements:</strong>
+                <span>A high-resolution <strong>transparent .PNG</strong> at <strong>150dpi</strong>. Minimum dimensions of at least <strong>1500px by 1995px</strong> (not including outer transparent pixels). To enable <strong>all</strong> products, your file must be at least <strong>5000px by 5500px</strong>.</span>
+              </div>
+
+              <!-- SECTION A: METADATA & TAGS -->
+              <div class="tp-metadata-grid">
+                <div class="tp-meta-col">
+                  <div class="tp-form-group">
+                    <label class="tp-field-label">Design Title</label>
+                    <span class="tp-field-sub">Give your design a name!</span>
+                    <input type="text" id="inputTitle" class="tp-input" placeholder="Title" />
+                  </div>
+
+                  <div class="tp-form-group">
+                    <label class="tp-field-label">Description</label>
+                    <span class="tp-field-sub">Describe your design in a short sentence or two!</span>
+                    <textarea id="inputDescription" class="tp-input tp-textarea" rows="4" placeholder="Describe your design"></textarea>
+                  </div>
+
+                  <div class="tp-form-group">
+                    <select id="selectAlbum" class="tp-select">
+                      <option value="">No Available Albums</option>
+                    </select>
+                    <a href="#" class="tp-link tp-link-sm" id="linkManageAlbums">Manage Albums</a>
+                  </div>
+                </div>
+
+                <div class="tp-meta-col">
+                  <div class="tp-form-group">
+                    <label class="tp-field-label">Main Tag</label>
+                    <span class="tp-field-sub">What (1) tag would I search to find your design?</span>
+                    <input type="text" id="inputMainTag" class="tp-input" placeholder="Main tag" />
+                  </div>
+
+                  <div class="tp-form-group">
+                    <label class="tp-field-label">Supporting Tags</label>
+                    <span class="tp-field-sub">What other relevant tags would customers use to find your design?</span>
+                    <textarea id="inputSupportingTags" class="tp-input tp-textarea" rows="4" placeholder="Use commas to separate tags"></textarea>
+                    <span class="tp-field-hint">Use commas to separate tags</span>
+                  </div>
+
+                  <div class="tp-form-group tp-mature-group">
+                    <span class="tp-field-label">Does this design contain Mature Content, such as nudity or other adult themes?</span>
+                    <span class="tp-field-sub">If you are not sure, check out our <a href="#" class="tp-link">FAQ</a>.</span>
+                    <div class="tp-radio-row">
+                      <label class="tp-radio-label">
+                        <input type="radio" name="matureContent" value="yes" id="radioMatureYes">
+                        <span>Yes</span>
+                      </label>
+                      <label class="tp-radio-label">
+                        <input type="radio" name="matureContent" value="no" id="radioMatureNo" checked>
+                        <span>No</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SECTION B: APPAREL TABLE & LIVE MOCKUP PREVIEW -->
+              <div class="tp-apparel-preview-split">
+                <!-- Left: Garment Canvas with Silhouette & Artwork Box -->
+                <div class="tp-canvas-container">
+                  <div class="tp-mockup-frame" id="garmentCanvas">
+                    <div class="tp-realistic-tshirt-stage" id="tshirtStage">
+                      <!-- Photorealistic T-Shirt Canvas (Tinted to selected color with realistic folds/lighting) -->
+                      <canvas id="tshirtCanvasEl" width="451" height="458" class="tp-tshirt-canvas"></canvas>
+                      
+                      <!-- Printable Boundary Box matching Reference Image 2 -->
+                      <div class="tp-artwork-boundary" id="artworkBoundary">
+                        <!-- Placed artwork image -->
+                        <img id="garmentArtworkImg" class="tp-artwork-img" src="" alt="Artwork" style="display: none;" />
+                        
+                        <!-- Interactive Drag & Drop Placeholder Box (Matches Reference Image 2) -->
+                        <div class="tp-placeholder-art" id="garmentPlaceholder" title="Click or drag and drop artwork here">
+                          <span class="tp-drag-drop-title">Drag and drop<br>artwork here</span>
+                          <div class="tp-upload-cloud-icon">
+                            <svg width="34" height="23" viewBox="0 0 34 23" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M7.5 21C4.46 21 2 18.54 2 15.5C2 12.64 4.19 10.29 7.01 10.04C7.63 5.52 11.52 2 16.25 2C21.46 2 25.75 6.06 26.04 11.23C28.85 11.58 31 13.99 31 16.9C31 19.72 28.72 22 25.9 22H7.5Z" fill="#E2E8F0" />
+                              <path d="M16.5 7.5L11.5 13H14.5V18H18.5V13H21.5L16.5 7.5Z" fill="#0F172A" />
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Right: Apparel Products Table -->
+                <div class="tp-products-table-box">
+                  <table class="tp-apparel-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 45%;">Item</th>
+                        <th style="width: 20%; text-align: center;">Enable</th>
+                        <th style="width: 35%;">Default Color</th>
+                      </tr>
+                    </thead>
+                    <tbody id="apparelTableBody">
+                      <!-- Populated dynamically -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- SECTION C: CONFIGURE OTHER PRODUCTS -->
+              <div class="tp-other-products-section">
+                <h3 class="tp-other-heading">Configure Other Products</h3>
+                <div class="tp-other-grid" id="tpOtherGrid">
+                  <!-- 14 Product Cards injected dynamically -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- =============================================================== -->
+  <!-- BOTTOM STICKY BAR (CYBER-LUMINOUS GLASS PANEL)                  -->
+  <!-- =============================================================== -->
+  <footer class="bottom-bar">
+    <div class="bottom-main-row">
+      <!-- Progress Bar -->
+      <div class="progress-container">
+        <div class="progress-meta">
+          <span class="progress-status" id="progressStatusText">0 / 0 designs configured</span>
+          <span class="progress-val" id="progressValText">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <!-- Action & Log Toggle -->
+      <div class="bottom-actions">
+        <button id="btnToggleTerminal" class="btn btn-secondary btn-sm" title="Toggle activity log drawer">
+          <span class="terminal-indicator-dot"></span>
+          Activity Log <span id="logChevron">▲</span>
+        </button>
+
+        <button id="btnRunAutomation" class="btn btn-primary btn-run" title="Launch 1-Click Autopilot in TeePublic">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          LAUNCH AUTOPILOT
+        </button>
+      </div>
+    </div>
+
+    <!-- Collapsible Activity Log Drawer -->
+    <div class="terminal-drawer" id="terminalDrawer">
+      <div class="drawer-header">
+        <div class="drawer-header-left">
+          <span class="terminal-dot-pulse"></span>
+          <span class="drawer-title">ACTIVITY TERMINAL (REAL-TIME STREAM)</span>
+        </div>
+        <div class="drawer-tools">
+          <button id="btnCopyLogs" class="btn-link">Copy</button>
+          <button id="btnClearLogs" class="btn-link">Clear</button>
+        </div>
+      </div>
+      <div class="drawer-body" id="logTerminalBody">
+        <!-- Live SSE Logs appended here -->
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

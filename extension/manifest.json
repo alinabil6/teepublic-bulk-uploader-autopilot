@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Magic Fabrica - TeePublic Autopilot",
+  "version": "1.0.0",
+  "description": "Magic Fabrica Autopilot for TeePublic Bulk Uploader. 1-Click live autonomous listing, color selection, and publishing agent.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Magic Fabrica - TeePublic Autopilot"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.teepublic.com/*",
+        "*://teepublic.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": [
+        "*://*.teepublic.com/*",
+        "*://teepublic.com/*"
+      ]
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.teepublic.com/*",
+    "*://teepublic.com/*",
+    "http://127.0.0.1:5050/*",
+    "http://localhost:5050/*"
+  ]
+}

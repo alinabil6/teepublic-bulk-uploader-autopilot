@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeePublic Autopilot Agent</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="header-brand">
+        <div class="brand-icon" style="background: transparent; padding: 0; overflow: hidden;"><img src="icons/icon48.png" alt="Magic Fabrica" style="width: 28px; height: 28px; border-radius: 6px; display: block;" /></div>
+        <div class="brand-meta">
+          <h1 class="brand-title">Magic Fabrica</h1>
+          <span class="brand-sub">TeePublic Autopilot Agent</span>
+        </div>
+      </div>
+      <div class="status-indicator" id="statusIndicator">
+        <span class="status-dot active" id="statusDot"></span>
+        <span class="status-text active" id="statusText">READY</span>
+      </div>
+    </header>
+
+    <!-- Local Server Connection Card -->
+    <div class="connection-card" id="connectionCard">
+      <div class="conn-left">
+        <span class="conn-dot" id="connDot"></span>
+        <span class="conn-label" id="connLabel">Connecting to Studio (5050)...</span>
+      </div>
+      <button class="btn-icon" id="btnRefreshConn" title="Refresh local studio connection">↻</button>
+    </div>
+
+    <!-- Active Design Queue Card -->
+    <div class="queue-status-banner" id="queueStatusBanner">
+      <div class="queue-meta">
+        <span class="queue-label">CURRENT DESIGN IN QUEUE</span>
+        <span class="queue-design-title" id="queueDesignTitle">Loading queue...</span>
+        <div class="queue-sub-meta" id="queueSubMeta" style="font-size: 11px; color: #94A3B8; margin-top: 4px; display: flex; gap: 8px;">
+          <span id="queueMainTag">Tag: —</span>
+          <span>•</span>
+          <span id="queueColor">Color: Black</span>
+        </div>
+      </div>
+      <span class="queue-counter-badge" id="queueCounterBadge">0 / 0</span>
+    </div>
+
+    <!-- Real-Time Automation Tracker Process -->
+    <div class="popup-tracker-card" id="popupTrackerCard">
+      <div class="popup-tracker-header">
+        <span class="popup-tracker-title">AUTOPILOT PROGRESS</span>
+        <span class="popup-tracker-pct" id="popupTrackerPct">0%</span>
+      </div>
+      <div class="popup-tracker-bar-bg">
+        <div class="popup-tracker-bar-fill" id="popupTrackerBarFill" style="width: 0%"></div>
+      </div>
+      <div class="popup-tracker-status-line" id="popupTrackerStatusLine">Ready to start</div>
+      <div class="popup-tracker-steps" id="popupTrackerSteps">
+        <div class="popup-step-chip" id="pstep-1"><span class="pstep-dot"></span><span>1. Navigate</span></div>
+        <div class="popup-step-chip" id="pstep-2"><span class="pstep-dot"></span><span>2. Drop Art</span></div>
+        <div class="popup-step-chip" id="pstep-3"><span class="pstep-dot"></span><span>3. Get Started</span></div>
+        <div class="popup-step-chip" id="pstep-4"><span class="pstep-dot"></span><span>4. Meta & Tags</span></div>
+        <div class="popup-step-chip" id="pstep-5"><span class="pstep-dot"></span><span>5. Colors (14)</span></div>
+        <div class="popup-step-chip" id="pstep-6"><span class="pstep-dot"></span><span>6. Publish</span></div>
+      </div>
+    </div>
+
+    <!-- Single Master Action Button -->
+    <div class="actions-section">
+      <button class="btn btn-primary" id="btnFillDesign" title="1-Click Autopilot: Navigates, uploads artwork, fills metadata, sets tags from suggestions, configures all colors, and publishes">
+        <span class="btn-icon">🚀</span>
+        START AUTOPILOT (1-CLICK)
+      </button>
+
+      <div class="action-btn-row">
+        <button class="btn btn-secondary" id="btnFillNext" title="Autopilot active design and automatically loop to Next Design">
+          <span>⏩</span> Autopilot & Next
+        </button>
+        <button class="btn btn-secondary" id="btnSyncLocal" title="Pull latest CSV & artwork from Local Studio">
+          <span>🔄</span> Sync Queue
+        </button>
+      </div>
+    </div>
+
+    <!-- Preferences (Collapsible) -->
+    <div class="pref-accordion">
+      <div class="pref-header" id="prefHeader">
+        <span class="pref-title">Upload Defaults</span>
+        <span class="pref-chevron" id="prefChevron">▼</span>
+      </div>
+      <div class="pref-body collapsed" id="prefBody">
+        <div class="pref-row">
+          <label>Color Preset:</label>
+          <select id="prefColorMode" class="pref-select">
+            <option value="all">All Colors (Full Palette)</option>
+            <option value="dark" selected>Dark Colors (Black, Navy)</option>
+            <option value="light">Light Colors (White, Heather)</option>
+          </select>
+        </div>
+
+        <div class="pref-row">
+          <label>Print Location:</label>
+          <select id="prefPrintLocation" class="pref-select">
+            <option value="front" selected>Front Print</option>
+            <option value="back">Back Print</option>
+          </select>
+        </div>
+
+        <div class="pref-row">
+          <label>Mature Content:</label>
+          <select id="prefMature" class="pref-select">
+            <option value="no" selected>No (Safe for all)</option>
+            <option value="yes">Yes (Mature)</option>
+          </select>
+        </div>
+
+        <div class="pref-row">
+          <label>Default Apparel Color:</label>
+          <select id="prefDefaultColor" class="pref-select">
+            <option value="Black" selected>Black</option>
+            <option value="White">White</option>
+            <option value="Navy">Navy</option>
+            <option value="Forest Green">Forest Green</option>
+            <option value="Red">Red</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Help & Links Footer -->
+    <footer class="popup-footer">
+      <span class="footer-hint">Shortcut: Press <b>Alt+F</b> on TeePublic page to run Autopilot</span>
+      <div class="footer-links">
+        <a href="http://127.0.0.1:5050" target="_blank" class="footer-link">Open Queue Studio ↗</a>
+      </div>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

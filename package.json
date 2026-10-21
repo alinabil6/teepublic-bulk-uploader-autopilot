@@ -1,0 +1,10 @@
+{
+  "name": "teepublic-bulk-uploader",
+  "version": "1.0.0",
+  "description": "TeePublic Bulk Uploader - Automation Tool",
+  "scripts": {
+    "start": "py main.py",
+    "dev": "py server.py",
+    "test": "py test_suite.py"
+  }
+}
