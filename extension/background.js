@@ -1,5 +1,6 @@
 /**
  * TeePublic Bulk Uploader Companion — Background Service Worker (Manifest V3)
+ * Universal compatibility: Tor Browser, Firefox, Chrome, Brave, Edge
  */
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -27,6 +28,19 @@ function updateBadge(enabled) {
   } else {
     chrome.action.setBadgeText({ text: "" });
   }
+}
+
+// Memory-safe, chunked ArrayBuffer to Base64 encoder (handles 50MB+ images without call stack overflow)
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  const chunkSize = 16384;
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
 }
 
 // Listen for messages from popup or content scripts
@@ -60,5 +74,67 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     sendResponse({ success: true });
     return true;
+  }
+
+  // ===================================================================
+  // PRIVILEGED LOCAL API PROXY (Bypasses Tor/Firefox Mixed-Content Blocks)
+  // ===================================================================
+
+  if (message.action === "FETCH_LOCAL_STATE") {
+    (async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        const res = await fetch("http://127.0.0.1:5050/api/state", {
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          sendResponse({ success: false, error: `HTTP ${res.status}` });
+          return;
+        }
+
+        const state = await res.json();
+        sendResponse({ success: true, state: state });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message || "Failed to reach local server" });
+      }
+    })();
+    return true; // Keep message channel open for async response
+  }
+
+  if (message.action === "FETCH_LOCAL_THUMBNAIL") {
+    (async () => {
+      try {
+        const idx = message.index !== undefined ? message.index : 0;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const res = await fetch(`http://127.0.0.1:5050/api/thumbnail/${idx}`, {
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          sendResponse({ success: false, error: `HTTP ${res.status}` });
+          return;
+        }
+
+        const mimeType = res.headers.get("content-type") || "image/png";
+        const buffer = await res.arrayBuffer();
+        const base64 = arrayBufferToBase64(buffer);
+
+        sendResponse({
+          success: true,
+          base64: base64,
+          mimeType: mimeType
+        });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message || "Failed to fetch thumbnail" });
+      }
+    })();
+    return true; // Keep message channel open for async response
   }
 });

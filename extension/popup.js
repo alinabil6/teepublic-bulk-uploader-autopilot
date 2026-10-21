@@ -161,28 +161,47 @@ document.addEventListener("DOMContentLoaded", async () => {
     connDot.className = "conn-dot";
     connLabel.textContent = "Checking Studio Queue (Port 5050)...";
 
+    // 1. Try privileged background script proxy first (bypasses Tor/Firefox restrictions)
+    let serverState = null;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch(LOCAL_SERVER_URL, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const serverState = await res.json();
-        const designs = serverState.designs || [];
-        connDot.className = "conn-dot connected";
-        connLabel.textContent = `Connected (Port 5050) — ${designs.length} listings in queue`;
-
-        const curIdx = serverState.current_index >= 0 ? serverState.current_index : 0;
-        await chrome.storage.local.set({
-          cachedDesigns: designs,
-          activeDesignIndex: curIdx,
-          extensionEnabled: true
+      serverState = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: "FETCH_LOCAL_STATE" }, (resp) => {
+          if (!chrome.runtime.lastError && resp && resp.success && resp.state) {
+            resolve(resp.state);
+          } else {
+            resolve(null);
+          }
         });
-        updateQueueUI(designs, curIdx);
-        return;
-      }
+      });
     } catch (_) {}
+
+    // 2. Direct fetch fallback
+    if (!serverState) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(LOCAL_SERVER_URL, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          serverState = await res.json();
+        }
+      } catch (_) {}
+    }
+
+    if (serverState) {
+      const designs = serverState.designs || [];
+      connDot.className = "conn-dot connected";
+      connLabel.textContent = `Connected (Port 5050) — ${designs.length} listings in queue`;
+
+      const curIdx = serverState.current_index >= 0 ? serverState.current_index : 0;
+      await chrome.storage.local.set({
+        cachedDesigns: designs,
+        activeDesignIndex: curIdx,
+        extensionEnabled: true
+      });
+      updateQueueUI(designs, curIdx);
+      return;
+    }
 
     // Fallback to offline / stored cache
     connDot.className = "conn-dot";

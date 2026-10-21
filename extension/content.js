@@ -21,6 +21,102 @@ let currentTracker = {
   msg: "Autopilot Ready"
 };
 
+// ===================================================================
+// PRIVILEGED LOCAL API PROXY & BASE64 ENGINE
+// Completely bypasses Tor Browser / Firefox HTTPS Mixed-Content blocking
+// ===================================================================
+
+function base64ToBlob(base64Data, contentType) {
+  const byteCharacters = atob(base64Data);
+  const byteArrays = [];
+  const sliceSize = 32768;
+  for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+    const slice = byteCharacters.slice(offset, offset + sliceSize);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    byteArrays.push(new Uint8Array(byteNumbers));
+  }
+  return new Blob(byteArrays, { type: contentType || 'image/png' });
+}
+
+// Proxied state fetcher via background script (works in all browsers)
+async function apiGetStudioState() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: "FETCH_LOCAL_STATE" }, async (response) => {
+        if (!chrome.runtime.lastError && response && response.success && response.state) {
+          resolve(response.state);
+          return;
+        }
+        // Direct fallback
+        try {
+          const direct = await fetch("http://127.0.0.1:5050/api/state");
+          if (direct.ok) {
+            const data = await direct.json();
+            resolve(data);
+            return;
+          }
+        } catch (_) {}
+        resolve(null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+// Proxied thumbnail blob fetcher via background script
+async function apiGetThumbnailBlob(index) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: "FETCH_LOCAL_THUMBNAIL", index: index }, async (response) => {
+        if (!chrome.runtime.lastError && response && response.success && response.base64) {
+          try {
+            const blob = base64ToBlob(response.base64, response.mimeType || "image/png");
+            resolve(blob);
+            return;
+          } catch (e) {
+            console.warn("[Autopilot] base64 decode error:", e);
+          }
+        }
+        // Direct fallback
+        try {
+          const direct = await fetch(`http://127.0.0.1:5050/api/thumbnail/${index}`);
+          if (direct.ok) {
+            const blob = await direct.blob();
+            resolve(blob);
+            return;
+          }
+        } catch (_) {}
+        resolve(null);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+// Suppress blocking page alerts (e.g. TeePublic premature upload warnings)
+function suppressPageAlerts() {
+  try {
+    const script = document.createElement("script");
+    script.textContent = `
+      (function() {
+        if (window.__tpAlertSuppressed) return;
+        window.__tpAlertSuppressed = true;
+        const _orig = window.alert;
+        window.alert = function(msg) {
+          console.warn("[Magic Fabrica - Intercepted TeePublic Alert]:", msg);
+        };
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  } catch (_) {}
+}
+
 // Initialize when page is ready
 (async function init() {
   const store = await chrome.storage.local.get({
@@ -197,10 +293,9 @@ async function executeMasterWorkflow(advanceNext = false) {
     let curIdx = 0;
 
     try {
-      const res = await fetch("http://127.0.0.1:5050/api/state");
-      if (res.ok) {
-        const serverState = await res.json();
-        designs = serverState.designs || [];
+      const serverState = await apiGetStudioState();
+      if (serverState && serverState.designs && serverState.designs.length > 0) {
+        designs = serverState.designs;
         curIdx = serverState.current_index >= 0 ? serverState.current_index : 0;
         totalCount = designs.length;
         design = designs[curIdx] || null;
@@ -209,6 +304,8 @@ async function executeMasterWorkflow(advanceNext = false) {
           cachedDesigns: designs,
           activeDesignIndex: curIdx
         });
+      } else {
+        throw new Error("No server state");
       }
     } catch (_) {
       const store = await chrome.storage.local.get({ cachedDesigns: [], activeDesignIndex: 0 });
@@ -239,6 +336,9 @@ async function executeMasterWorkflow(advanceNext = false) {
     // WORKFLOW PART 1: UPLOAD ARTWORK (/designs/bulk_uploader)
     // ===============================================================
     if (pageType === "BULK_DROPZONE") {
+      // Suppress disruptive page alerts (e.g. premature upload prompts)
+      suppressPageAlerts();
+
       // Keep page firmly at top (NO erratic scrolling down to footer!)
       window.scrollTo({ top: 0, behavior: 'instant' });
 
@@ -261,9 +361,8 @@ async function executeMasterWorkflow(advanceNext = false) {
           updateTracker(2, pct, `Attaching artwork #${i + 1}/${totalUploadCount}: ${fileName}`);
 
           try {
-            const imgRes = await fetch(`http://127.0.0.1:5050/api/thumbnail/${i}`);
-            if (imgRes.ok) {
-              const blob = await imgRes.blob();
+            const blob = await apiGetThumbnailBlob(i);
+            if (blob) {
               const bUrl = URL.createObjectURL(blob);
               localBlobUrls.push(bUrl);
               const file = new File([blob], fileName, { type: blob.type || "image/png" });
@@ -276,19 +375,39 @@ async function executeMasterWorkflow(advanceNext = false) {
 
         if (dt.items.length > 0) {
           fileInput.files = dt.files;
-          fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-          fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+          fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
           if (dropzone) {
             const dtDrop = new DataTransfer();
             for (let i = 0; i < dt.files.length; i++) {
               dtDrop.items.add(dt.files[i]);
             }
-            dropzone.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dtDrop, bubbles: true }));
-            dropzone.dispatchEvent(new DragEvent("dragover", { dataTransfer: dtDrop, bubbles: true }));
-            dropzone.dispatchEvent(new DragEvent("drop", { dataTransfer: dtDrop, bubbles: true }));
+            dropzone.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dtDrop, bubbles: true, composed: true }));
+            dropzone.dispatchEvent(new DragEvent("dragover", { dataTransfer: dtDrop, bubbles: true, composed: true }));
+            dropzone.dispatchEvent(new DragEvent("drop", { dataTransfer: dtDrop, bubbles: true, composed: true }));
           }
+
+          // Trigger TeePublic jQuery handler in page world for Tor Browser & Firefox
+          try {
+            const scr = document.createElement("script");
+            scr.textContent = `
+              (function() {
+                try {
+                  var inp = document.querySelector('input.jsBulkS3FileInput, input[type="file"]');
+                  if (inp && inp.files && inp.files.length > 0 && window.jQuery) {
+                    window.jQuery(inp).trigger('change');
+                  }
+                } catch(e) {}
+              })();
+            `;
+            (document.head || document.documentElement).appendChild(scr);
+            scr.remove();
+          } catch (_) {}
+
           showToast(`🖼️ Attached all ${dt.items.length} designs to Bulk Uploader!`, "success", 2500);
+        } else {
+          showToast("⚠️ Could not load designs from Desktop Studio. Check that Studio is running!", "warning", 4000);
         }
 
         await sleep(800);
@@ -319,8 +438,19 @@ async function executeMasterWorkflow(advanceNext = false) {
         });
       }
 
+      // Verify that TeePublic has actually rendered uploaded artwork elements in DOM
+      function hasUploadedArtworks() {
+        const imgs = document.querySelectorAll('.jsBulkUploaderImages img, .current img');
+        return imgs.length > 0;
+      }
+
       // Easily & reliably recognize whichever Get Started button is genuinely visible
+      // HARD REQUIREMENT: Never return any button if zero images have completed uploading!
       function findVisibleGetStartedButton() {
+        if (!hasUploadedArtworks()) {
+          return null;
+        }
+
         const s3Cont = document.querySelector('.jsS3BulkUploaderSubmitContainer');
         const bulkCont = document.querySelector('.jsBulkUploaderSubmitContainer');
 
@@ -334,7 +464,7 @@ async function executeMasterWorkflow(advanceNext = false) {
           if (btn) return { btn: btn, type: 'bulk' };
         }
 
-        const all = Array.from(document.querySelectorAll('.m-bulk-uploader__submit-button, .jsBulkUploaderSubmit, .jsS3BulkUploaderSubmit, [class*="BulkUploaderSubmit"], .btn--green, div, button'));
+        const all = Array.from(document.querySelectorAll('.m-bulk-uploader__submit-button, .jsBulkUploaderSubmit, .jsS3BulkUploaderSubmit, [class*="BulkUploaderSubmit"], .btn--green, button'));
         for (const el of all) {
           const text = (el.innerText || el.textContent || '').trim().toUpperCase();
           if (text === 'GET STARTED' || text.includes('GET STARTED')) {
@@ -412,18 +542,25 @@ async function executeMasterWorkflow(advanceNext = false) {
         script.remove();
       }
 
-      updateTracker(3, 50, `Uploading ${totalUploadCount} design(s)... Watching for Get Started button`);
-      showToast(`⏳ Uploading ${totalUploadCount} design(s)... Watching for Get Started button...`, "info", 2000);
+      updateTracker(3, 40, `Uploading ${totalUploadCount} design(s)... Watching for completion`);
+      showToast(`⏳ Uploading ${totalUploadCount} design(s)... TeePublic processing uploads...`, "info", 3000);
 
       let detectedBtnObj = null;
-      for (let attempt = 0; attempt < 90; attempt++) {
+      for (let attempt = 0; attempt < 180; attempt++) {
         ensureThumbnailsVisible();
         window.scrollTo({ top: 0, behavior: 'instant' });
+
+        const uploadedCount = document.querySelectorAll('.jsBulkUploaderImages img, .current img').length;
+        if (uploadedCount > 0) {
+          const pct = Math.min(58, 40 + Math.round((uploadedCount / totalUploadCount) * 18));
+          updateTracker(3, pct, `TeePublic uploaded ${uploadedCount}/${totalUploadCount} design(s)...`);
+        }
+
         detectedBtnObj = findVisibleGetStartedButton();
         if (detectedBtnObj) {
           break;
         }
-        await sleep(350);
+        await sleep(500);
       }
 
       ensureThumbnailsVisible();
@@ -1302,9 +1439,8 @@ async function syncWithLocalServer() {
   showToast("🔄 Syncing with Desktop Studio (port 5050)...", "info", 1500);
 
   try {
-    const res = await fetch("http://127.0.0.1:5050/api/state");
-    if (res.ok) {
-      const data = await res.json();
+    const data = await apiGetStudioState();
+    if (data && data.designs) {
       const designs = data.designs || [];
       const idx = data.current_index >= 0 ? data.current_index : 0;
       await chrome.storage.local.set({ cachedDesigns: designs, activeDesignIndex: idx });
