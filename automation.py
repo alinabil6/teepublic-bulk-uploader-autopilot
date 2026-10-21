@@ -7,7 +7,17 @@ import sys
 import time
 import logging
 from typing import List, Dict, Any, Optional, Callable
-from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext, TimeoutError as PlaywrightTimeoutError
+
+try:
+    from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext, TimeoutError as PlaywrightTimeoutError
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    sync_playwright = None
+    Page = Any
+    Browser = Any
+    BrowserContext = Any
+    PlaywrightTimeoutError = Exception
+    PLAYWRIGHT_AVAILABLE = False
 
 # TeePublic official 42 apparel colors hex map for reference and automation
 TEEPUBLIC_COLORS = {
@@ -87,6 +97,12 @@ class TeePublicAutomation:
         """Execute the multi-file TeePublic upload flow."""
         self.is_running = True
         self.stop_requested = False
+
+        if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
+            self.log("INFO", "💡 Live automation is powered by the Magic Fabrica Chrome Extension.")
+            self.log("WARNING", "Playwright python package is not installed. To use the Python engine, run: pip install playwright")
+            self.is_running = False
+            return False
 
         matched_designs = [d for d in self.designs if d.get("is_matched") and d.get("file_path")]
         if not matched_designs:
