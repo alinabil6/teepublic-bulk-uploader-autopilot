@@ -13,6 +13,7 @@ ENV/
 
 # Scratch & test folders
 scratch/
+dist/
 uploads/*
 !uploads/.gitkeep
 
