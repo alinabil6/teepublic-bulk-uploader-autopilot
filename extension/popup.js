@@ -5,7 +5,7 @@
 const LOCAL_SERVER_URL = "http://127.0.0.1:5050/api/state";
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const statusDot = document.getElementById("statusDot");
+  const extensionToggle = document.getElementById("extensionToggle");
   const statusText = document.getElementById("statusText");
 
   const connDot = document.getElementById("connDot");
@@ -74,11 +74,51 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (msg.action === "TRACKER_UPDATE" && msg.tracker) {
       updatePopupTrackerUI(msg.tracker);
       if (msg.tracker.pct > 0 && msg.tracker.pct < 100) {
-        statusText.textContent = "RUNNING";
-        statusDot.className = "status-dot active";
+        // Tracker running
       } else if (msg.tracker.pct === 100) {
-        statusText.textContent = "COMPLETED";
+        updatePopupTrackerUI({ step: 6, pct: 100, msg: "Completed" });
       }
+    }
+  });
+
+  function updateToggleUI(isEnabled) {
+    if (extensionToggle) extensionToggle.checked = isEnabled;
+    if (statusText) {
+      statusText.textContent = isEnabled ? "ON" : "OFF";
+      statusText.className = isEnabled ? "status-toggle-text active" : "status-toggle-text inactive";
+    }
+    if (btnFillDesign) {
+      btnFillDesign.disabled = !isEnabled;
+      if (!isEnabled) {
+        btnFillDesign.innerHTML = `<span class="btn-icon">⏸️</span> EXTENSION DEACTIVATED (OFF)`;
+      } else {
+        btnFillDesign.innerHTML = `<span class="btn-icon">🚀</span> START AUTOPILOT (1-CLICK)`;
+      }
+    }
+    if (btnFillNext) {
+      btnFillNext.disabled = !isEnabled;
+    }
+  }
+
+  if (extensionToggle) {
+    extensionToggle.addEventListener("change", async (e) => {
+      const isEnabled = e.target.checked;
+      await chrome.storage.local.set({ extensionEnabled: isEnabled, pendingAutoList: false });
+      updateToggleUI(isEnabled);
+
+      // Broadcast toggle change to all open TeePublic tabs
+      try {
+        const tabs = await chrome.tabs.query({ url: "*://*.teepublic.com/*" });
+        for (const t of tabs) {
+          chrome.tabs.sendMessage(t.id, { action: "TOGGLE_EXTENSION", enabled: isEnabled }).catch(() => {});
+        }
+      } catch (_) {}
+    });
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.extensionEnabled !== undefined) {
+      updateToggleUI(Boolean(changes.extensionEnabled.newValue));
     }
   });
 
@@ -93,8 +133,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     cachedDesigns: []
   });
 
-  // Always keep extension enabled
-  await chrome.storage.local.set({ extensionEnabled: true });
+  updateToggleUI(data.extensionEnabled);
 
   prefColorMode.value = data.prefColorMode;
   prefPrintLocation.value = data.prefPrintLocation;
@@ -211,6 +250,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function triggerAutopilot(advanceNext = false) {
+    const store = await chrome.storage.local.get({ extensionEnabled: true });
+    if (store.extensionEnabled === false) {
+      alert("Autopilot is currently turned OFF. Turn the toggle ON first!");
+      return;
+    }
+
     btnFillDesign.disabled = true;
     btnFillDesign.innerHTML = `<span>⚙️</span> Autopilot Starting...`;
     updatePopupTrackerUI({ step: 1, pct: 15, msg: "Starting Autopilot pipeline..." });
@@ -222,8 +267,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await chrome.storage.local.set({
       pendingAutoList: true,
       triggeredByPopupTimestamp: Date.now(),
-      advanceNextAfterFill: advanceNext,
-      extensionEnabled: true
+      advanceNextAfterFill: advanceNext
     });
 
     if (!isTeePublic) {

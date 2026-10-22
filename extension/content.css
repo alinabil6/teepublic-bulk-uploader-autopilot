@@ -69,7 +69,100 @@
 .hud-tools {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+/* In-Page HUD Toggle Switch */
+.hud-toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 2px 7px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  user-select: none;
+}
+
+.hud-toggle-text {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  transition: color 0.2s ease;
+}
+
+.hud-toggle-text.on {
+  color: #38BDF8;
+}
+
+.hud-toggle-text.off {
+  color: #EF4444;
+}
+
+.hud-toggle-label {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 16px;
+  cursor: pointer;
+  margin: 0;
+}
+
+.hud-toggle-label input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.hud-toggle-slider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #334155;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.hud-toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 1px;
+  bottom: 1px;
+  background-color: #F8FAFC;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.hud-toggle-label input:checked + .hud-toggle-slider {
+  background: linear-gradient(135deg, #38BDF8, #2563EB);
+  border-color: #38BDF8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+
+.hud-toggle-label input:checked + .hud-toggle-slider:before {
+  transform: translateX(16px);
+  background-color: #FFFFFF;
+}
+
+.hud-toggle-label input:not(:checked) + .hud-toggle-slider {
+  background-color: #1E293B;
+  border-color: #475569;
+}
+
+.hud-toggle-label input:not(:checked) + .hud-toggle-slider:before {
+  background-color: #64748B;
+}
+
+/* Deactivated HUD */
+#tp-companion-hud.hud-deactivated {
+  border-color: rgba(239, 68, 68, 0.4);
 }
 
 .hud-tool-btn {
@@ -108,6 +201,12 @@
   background: rgba(56, 189, 248, 0.15);
   color: #38BDF8;
   border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.hud-status-badge.paused {
+  background: rgba(239, 68, 68, 0.15);
+  color: #EF4444;
+  border: 1px solid rgba(239, 68, 68, 0.35);
 }
 
 .hud-counter {
@@ -284,6 +383,14 @@
   cursor: pointer;
   border: none;
   transition: all 0.15s ease;
+}
+
+.hud-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed !important;
+  pointer-events: none;
+  filter: grayscale(0.5);
+  box-shadow: none !important;
 }
 
 .hud-btn-primary {

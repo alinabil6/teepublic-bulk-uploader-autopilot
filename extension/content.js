@@ -133,51 +133,69 @@ function suppressPageAlerts() {
     trackerState: null
   });
 
-  if (store.extensionEnabled) {
-    mountHUD(store);
+  const isEnabled = store.extensionEnabled !== false;
+
+  // Always mount HUD with toggle
+  mountHUD(store);
+  if (isEnabled) {
     attachKeyboardShortcuts();
+  }
 
-    // Verify if this is an authorized, active pipeline continuation:
-    // 1) Mid-pipeline session transition (Dropzone -> Edit form, or Design N -> Design N+1)
-    // 2) Explicitly triggered from Popup within the last 30 seconds
-    const sessionToken = sessionStorage.getItem("TP_AUTOPILOT_ACTIVE_SESSION");
-    const isMidPipeline = Boolean(sessionToken && (Date.now() - parseInt(sessionToken, 10) < 1800000));
-    const isRecentPopupTrigger = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 60000));
+  const pageType = getPageType();
 
-    if (store.pendingAutoList && (isMidPipeline || isRecentPopupTrigger)) {
+  // HARD GUARANTEE: Opening Bulk Uploader directly MUST NEVER auto-run!
+  // Wait until user explicitly clicks "START AUTOPILOT" (or triggers from popup).
+  if (pageType === "BULK_DROPZONE") {
+    // Only continue if the user explicitly clicked Start in popup less than 15s ago to navigate here
+    const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 15000));
+    const continuationToken = sessionStorage.getItem("TP_PIPELINE_CONTINUING");
+    const isContinuingNav = Boolean(continuationToken && (Date.now() - parseInt(continuationToken, 10) < 30000));
+
+    if (isEnabled && store.pendingAutoList && (isRecentPopupNav || isContinuingNav)) {
       await chrome.storage.local.set({ triggeredByPopupTimestamp: 0 });
+      sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
       sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
-
-      const pageType = getPageType();
-      if (pageType === "DESIGN_EDIT") {
-        showToast("🚀 TeePublic Autopilot Live! Continuing to listing form...", "info", 2000);
-        setTimeout(() => {
-          executeMasterWorkflow(store.advanceNextAfterFill || false);
-        }, 1200);
-      } else if (pageType === "BULK_DROPZONE") {
-        showToast("🚀 TeePublic Autopilot Live! Resuming dropzone upload...", "info", 2000);
-        setTimeout(() => {
-          executeMasterWorkflow(store.advanceNextAfterFill || false);
-        }, 1200);
-      }
-    } else {
-      // Direct window open or fresh navigation: NEVER auto-run without user clicking!
-      await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
-      sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
+      showToast("🚀 TeePublic Autopilot Live! Executing upload...", "info", 2000);
+      setTimeout(() => {
+        executeMasterWorkflow(store.advanceNextAfterFill || false);
+      }, 1200);
+      return;
     }
+
+    // Direct window open, tab restore, or manual visit: NEVER auto-run!
+    await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
+    sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
+    sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
+    return;
+  }
+
+  // For DESIGN_EDIT: Only auto-continue if this edit page is an active continuation
+  // of an upload just completed in Bulk Uploader (< 90 seconds ago)
+  const continuationToken = sessionStorage.getItem("TP_PIPELINE_CONTINUING");
+  const isContinuingPipeline = Boolean(continuationToken && (Date.now() - parseInt(continuationToken, 10) < 90000));
+
+  if (isEnabled && store.pendingAutoList && isContinuingPipeline && pageType === "DESIGN_EDIT") {
+    sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
+    showToast("🚀 Continuing Autopilot to listing metadata...", "info", 2000);
+    setTimeout(() => {
+      executeMasterWorkflow(store.advanceNextAfterFill || false);
+    }, 1200);
+  } else {
+    // Direct window open or fresh navigation: NEVER auto-run without user clicking!
+    await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
+    sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
+    sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
   }
 })();
 
 // Listen for messages from popup or background service worker
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "TOGGLE_EXTENSION") {
-    if (message.enabled) {
-      chrome.storage.local.get(null, (store) => {
-        mountHUD(store);
-        attachKeyboardShortcuts();
-      });
+    const isEnabled = Boolean(message.enabled);
+    applyHUDEnabledState(isEnabled);
+    if (isEnabled) {
+      attachKeyboardShortcuts();
     } else {
-      unmountHUD();
       detachKeyboardShortcuts();
     }
     sendResponse({ success: true });
@@ -200,6 +218,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleAutoListTrigger(true);
     sendResponse({ success: true });
     return true;
+  }
+});
+
+// Real-time synchronization across tabs and extension popup
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") {
+    if (changes.extensionEnabled !== undefined) {
+      const isEnabled = Boolean(changes.extensionEnabled.newValue);
+      applyHUDEnabledState(isEnabled);
+      if (isEnabled) {
+        attachKeyboardShortcuts();
+      } else {
+        detachKeyboardShortcuts();
+      }
+    }
+    if (changes.activeDesignIndex !== undefined || changes.cachedDesigns !== undefined) {
+      chrome.storage.local.get(["cachedDesigns", "activeDesignIndex"], (data) => {
+        updateHUDLabels(data.cachedDesigns?.[data.activeDesignIndex || 0], data.activeDesignIndex || 0, data.cachedDesigns?.length || 0);
+      });
+    }
   }
 });
 
@@ -238,6 +276,12 @@ function getPageType() {
 
 // Master Entry Point
 async function handleAutoListTrigger(advanceNext = false) {
+  const store = await chrome.storage.local.get({ extensionEnabled: true });
+  if (store.extensionEnabled === false) {
+    showToast("⚠️ Autopilot is turned OFF. Turn the toggle ON to start.", "warning", 3000);
+    return;
+  }
+
   if (isListingInProgress) {
     showToast("⚠️ Autopilot is currently navigating...", "warning");
     return;
@@ -253,6 +297,7 @@ async function handleAutoListTrigger(advanceNext = false) {
     updateTracker(1, 15, "Autopilot navigating to TeePublic Bulk Uploader...");
     showToast("📍 Navigating to TeePublic Bulk Uploader...", "info", 2000);
 
+    sessionStorage.setItem("TP_PIPELINE_CONTINUING", Date.now().toString());
     await chrome.storage.local.set({
       pendingAutoList: true,
       advanceNextAfterFill: advanceNext
@@ -616,6 +661,10 @@ async function executeMasterWorkflow(advanceNext = false) {
         // Continuous clicking watcher: repeat every 800ms until redirection away from bulk_uploader
         updateTracker(3, 62, "Processing design batch... Redirecting to listing editor in a moment");
         showToast("⏳ Processing design batch... Waiting for listing editor to load...", "info", 3000);
+
+        // Set pipeline continuing token so the subsequent edit form knows it was user-triggered
+        sessionStorage.setItem("TP_PIPELINE_CONTINUING", Date.now().toString());
+        await chrome.storage.local.set({ pendingAutoList: true });
 
         for (let wait = 0; wait < 120; wait++) {
           forceClickGetStarted(detectedBtnObj);
@@ -1438,6 +1487,13 @@ function mountHUD(store) {
         <span class="hud-brand-title">Magic Fabrica Autopilot</span>
       </div>
       <div class="hud-tools">
+        <div class="hud-toggle-container" title="Turn Autopilot ON/OFF">
+          <span class="hud-toggle-text on" id="hudToggleText">ON</span>
+          <label class="hud-toggle-label">
+            <input type="checkbox" id="hudToggleInput" checked>
+            <span class="hud-toggle-slider"></span>
+          </label>
+        </div>
         <button class="hud-tool-btn" id="btnHudMinimize" title="Minimize/Maximize">_</button>
         <button class="hud-tool-btn" id="btnHudClose" title="Hide HUD">✕</button>
       </div>
@@ -1512,6 +1568,70 @@ function mountHUD(store) {
   });
 
   document.getElementById("btnHudSync").addEventListener("click", syncWithLocalServer);
+
+  const toggleInput = document.getElementById("hudToggleInput");
+  if (toggleInput) {
+    toggleInput.addEventListener("change", (e) => {
+      const active = e.target.checked;
+      chrome.storage.local.set({ extensionEnabled: active, pendingAutoList: false });
+      applyHUDEnabledState(active);
+      if (active) {
+        attachKeyboardShortcuts();
+      } else {
+        detachKeyboardShortcuts();
+      }
+      showToast(active ? "✅ Autopilot Activated (ON)" : "⏸️ Autopilot Deactivated (OFF)", active ? "info" : "warning", 2500);
+    });
+  }
+
+  // Set initial HUD state
+  applyHUDEnabledState(store.extensionEnabled !== false);
+}
+
+function applyHUDEnabledState(isEnabled) {
+  const toggleInput = document.getElementById("hudToggleInput");
+  const toggleText = document.getElementById("hudToggleText");
+  const statusBadge = document.getElementById("hudStatusBadge");
+  const btnFill = document.getElementById("btnHudFill");
+  const btnNext = document.getElementById("btnHudNext");
+  const hud = document.getElementById("tp-companion-hud");
+
+  if (toggleInput) toggleInput.checked = isEnabled;
+  if (toggleText) {
+    toggleText.textContent = isEnabled ? "ON" : "OFF";
+    toggleText.className = isEnabled ? "hud-toggle-text on" : "hud-toggle-text off";
+  }
+
+  if (hud) {
+    if (isEnabled) {
+      hud.classList.remove("hud-deactivated");
+    } else {
+      hud.classList.add("hud-deactivated");
+    }
+  }
+
+  if (statusBadge && !isListingInProgress) {
+    if (isEnabled) {
+      statusBadge.className = "hud-status-badge";
+      statusBadge.textContent = "● AUTOPILOT READY";
+    } else {
+      statusBadge.className = "hud-status-badge paused";
+      statusBadge.textContent = "⏸️ AUTOPILOT DEACTIVATED (OFF)";
+    }
+  }
+
+  if (btnFill) {
+    btnFill.disabled = !isEnabled;
+    if (isEnabled) {
+      btnFill.innerHTML = `<span>🚀</span> START AUTOPILOT`;
+    } else {
+      btnFill.innerHTML = `<span>⏸️</span> AUTOPILOT OFF`;
+    }
+  }
+
+  if (btnNext) {
+    btnNext.disabled = !isEnabled;
+  }
 }
 
 function unmountHUD() {
