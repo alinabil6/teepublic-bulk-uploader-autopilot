@@ -5,7 +5,7 @@
   right: 24px !important;
   left: auto !important;
   top: auto !important;
-  z-index: 9999999 !important;
+  z-index: 2147483647 !important;
   background: rgba(11, 15, 25, 0.95);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -18,16 +18,97 @@
   width: 350px;
   overflow: hidden;
   user-select: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.25s !important;
 }
 
-#tp-companion-hud.minimized {
-  width: auto;
+#tp-companion-hud.hidden-hud {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: scale(0.85) translateY(20px) !important;
+  visibility: hidden !important;
 }
 
-#tp-companion-hud.minimized .hud-body,
-#tp-companion-hud.minimized .hud-footer {
-  display: none;
+/* Floating Mini Logo Launcher (Bottom-Right FAB) */
+#tp-hud-mini-launcher {
+  position: fixed !important;
+  bottom: 22px !important;
+  right: 22px !important;
+  width: 46px !important;
+  height: 46px !important;
+  border-radius: 50% !important;
+  background: rgba(15, 23, 42, 0.94) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.45) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 14px rgba(56, 189, 248, 0.3) !important;
+  cursor: pointer !important;
+  z-index: 2147483646 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  user-select: none !important;
+}
+
+#tp-hud-mini-launcher:hover {
+  transform: scale(1.1) translateY(-2px) !important;
+  border-color: #38BDF8 !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.65), 0 0 20px rgba(56, 189, 248, 0.5) !important;
+}
+
+#tp-hud-mini-launcher:active {
+  transform: scale(0.96) !important;
+}
+
+#tp-hud-mini-launcher.hidden-mini {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: scale(0.6) !important;
+  visibility: hidden !important;
+}
+
+.mini-launcher-inner {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.mini-launcher-icon {
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: 6px !important;
+  display: block !important;
+  pointer-events: none !important;
+}
+
+.mini-launcher-dot {
+  position: absolute !important;
+  top: 1px !important;
+  right: 1px !important;
+  width: 9px !important;
+  height: 9px !important;
+  border-radius: 50% !important;
+  border: 1.5px solid #0F172A !important;
+  box-sizing: content-box !important;
+}
+
+.mini-launcher-dot.on {
+  background-color: #10B981 !important;
+  box-shadow: 0 0 6px #10B981 !important;
+}
+
+.mini-launcher-dot.off {
+  background-color: #EF4444 !important;
+  box-shadow: 0 0 6px #EF4444 !important;
+}
+
+.mini-launcher-dot.running {
+  background-color: #38BDF8 !important;
+  box-shadow: 0 0 8px #38BDF8 !important;
+  animation: tpPulseGlow 1s infinite alternate !important;
 }
 
 .hud-header {

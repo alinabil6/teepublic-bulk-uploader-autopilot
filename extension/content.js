@@ -287,7 +287,8 @@ async function handleAutoListTrigger(advanceNext = false) {
     return;
   }
 
-  // Explicit user trigger: authorize session token
+  // Explicit user trigger: open HUD to view live progress & authorize session token
+  openHUD();
   sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
 
   const pageType = getPageType();
@@ -1550,13 +1551,31 @@ function mountHUD(store) {
 
   document.body.appendChild(hudElement);
 
+  // Create mini floating logo button in bottom-right corner
+  let miniLauncher = document.getElementById("tp-hud-mini-launcher");
+  if (!miniLauncher) {
+    miniLauncher = document.createElement("div");
+    miniLauncher.id = "tp-hud-mini-launcher";
+    miniLauncher.title = "Magic Fabrica Autopilot (Click to open)";
+    miniLauncher.innerHTML = `
+      <div class="mini-launcher-inner">
+        <img src="${logoUrl}" alt="Magic Fabrica" class="mini-launcher-icon" />
+        <span class="mini-launcher-dot on" id="miniLauncherDot"></span>
+      </div>
+    `;
+    document.body.appendChild(miniLauncher);
+
+    miniLauncher.addEventListener("click", () => {
+      openHUD();
+    });
+  }
+
   document.getElementById("btnHudMinimize").addEventListener("click", () => {
-    hudElement.classList.toggle("minimized");
+    closeHUD();
   });
 
   document.getElementById("btnHudClose").addEventListener("click", () => {
-    unmountHUD();
-    detachKeyboardShortcuts();
+    closeHUD();
   });
 
   document.getElementById("btnHudFill").addEventListener("click", () => {
@@ -1584,8 +1603,23 @@ function mountHUD(store) {
     });
   }
 
-  // Set initial HUD state
+  // Set initial HUD state & start collapsed as small logo by default
   applyHUDEnabledState(store.extensionEnabled !== false);
+  closeHUD();
+}
+
+function openHUD() {
+  const hud = document.getElementById("tp-companion-hud");
+  const mini = document.getElementById("tp-hud-mini-launcher");
+  if (hud) hud.classList.remove("hidden-hud");
+  if (mini) mini.classList.add("hidden-mini");
+}
+
+function closeHUD() {
+  const hud = document.getElementById("tp-companion-hud");
+  const mini = document.getElementById("tp-hud-mini-launcher");
+  if (hud) hud.classList.add("hidden-hud");
+  if (mini) mini.classList.remove("hidden-mini");
 }
 
 function applyHUDEnabledState(isEnabled) {
@@ -1595,11 +1629,16 @@ function applyHUDEnabledState(isEnabled) {
   const btnFill = document.getElementById("btnHudFill");
   const btnNext = document.getElementById("btnHudNext");
   const hud = document.getElementById("tp-companion-hud");
+  const miniDot = document.getElementById("miniLauncherDot");
 
   if (toggleInput) toggleInput.checked = isEnabled;
   if (toggleText) {
     toggleText.textContent = isEnabled ? "ON" : "OFF";
     toggleText.className = isEnabled ? "hud-toggle-text on" : "hud-toggle-text off";
+  }
+
+  if (miniDot && !isListingInProgress) {
+    miniDot.className = "mini-launcher-dot " + (isEnabled ? "on" : "off");
   }
 
   if (hud) {
@@ -1637,6 +1676,8 @@ function applyHUDEnabledState(isEnabled) {
 function unmountHUD() {
   const existing = document.getElementById("tp-companion-hud");
   if (existing) existing.remove();
+  const mini = document.getElementById("tp-hud-mini-launcher");
+  if (mini) mini.remove();
   const toast = document.getElementById("tp-companion-toast");
   if (toast) toast.remove();
   const modal = document.getElementById("tp-publish-notice-modal");
@@ -1649,6 +1690,16 @@ function updateHUDStatus(stateClass, text) {
   if (badge) {
     badge.className = "hud-status-badge " + stateClass;
     badge.textContent = text;
+  }
+  const miniDot = document.getElementById("miniLauncherDot");
+  if (miniDot) {
+    if (stateClass === "running") {
+      miniDot.className = "mini-launcher-dot running";
+    } else if (stateClass === "paused") {
+      miniDot.className = "mini-launcher-dot off";
+    } else {
+      miniDot.className = "mini-launcher-dot on";
+    }
   }
 }
 
