@@ -32,8 +32,8 @@ def parse_tags(tags_raw: str) -> Tuple[str, str, List[str]]:
         return "", "", []
 
     main_tag = raw_list[0]
-    # Supporting tags can be either remaining or all; keeping remaining + all clean
-    remaining = raw_list[1:] if len(raw_list) > 1 else [raw_list[0]]
+    # Supporting tags should be remaining tags; if only one tag exists, supporting tags is empty
+    remaining = raw_list[1:] if len(raw_list) > 1 else []
     supporting_tags = ", ".join(remaining)
     return main_tag, supporting_tags, raw_list
 
@@ -63,14 +63,20 @@ def parse_csv_file(file_path: str) -> Tuple[List[DesignItem], List[str]]:
     # Attempt reading with multiple encodings
     encodings = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
     df = None
+    last_err = None
     for enc in encodings:
         try:
             df = pd.read_csv(file_path, encoding=enc, dtype=str)
             break
-        except (UnicodeDecodeError, Exception):
+        except (UnicodeDecodeError, UnicodeError) as ue:
+            last_err = ue
             continue
+        except pd.errors.ParserError as pe:
+            raise ValueError(f"Malformed CSV syntax in '{os.path.basename(file_path)}': {pe}")
 
     if df is None:
+        if last_err:
+            raise ValueError(f"Unable to read CSV file with supported encodings ({', '.join(encodings)}): {last_err}")
         raise ValueError(f"Unable to read CSV file with supported encodings ({', '.join(encodings)})")
 
     if df.empty:

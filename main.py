@@ -24,7 +24,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="TeePublic Bulk Uploader")
     parser.add_argument("--csv", help="Path to initial CSV file to load", default=None)
     parser.add_argument("--folder", help="Path to initial artwork folder", default=None)
-    parser.add_argument("--host", help="Host interface to bind to (0.0.0.0 for all)", default="0.0.0.0")
+    parser.add_argument("--host", help="Host interface to bind to (default: 127.0.0.1)", default="127.0.0.1")
     parser.add_argument("--port", help="Port to run Flask server on", type=int, default=int(os.environ.get("PORT", 5050)))
     parser.add_argument("--no-browser", help="Do not open browser automatically", action="store_true")
     return parser.parse_known_args()

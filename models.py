@@ -23,6 +23,7 @@ class ColorPreference(str, Enum):
 class DesignItem:
     index: int
     file_name: str
+    original_filename: str = ""
     title: str = ""
     main_tag: str = ""
     supporting_tags: str = ""
@@ -31,7 +32,12 @@ class DesignItem:
     file_path: Optional[str] = None
     is_matched: bool = False
     status: str = "Pending Validation"
+    validation_warning: Optional[str] = None
     raw_data: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.original_filename and self.file_name:
+            self.original_filename = self.file_name
 
     @property
     def status_label(self) -> str:

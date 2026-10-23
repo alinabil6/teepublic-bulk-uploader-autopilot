@@ -128,16 +128,17 @@ class TeePublicAutomation:
 
         try:
             playwright_instance = sync_playwright().start()
-            # Launch headed browser so user can see TeePublic in action
-            browser = playwright_instance.chromium.launch(
+            user_data_dir = os.path.join(os.getcwd(), "browser_data")
+            os.makedirs(user_data_dir, exist_ok=True)
+            # Use persistent context to retain login session & Cloudflare clearance across runs
+            context = playwright_instance.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
                 headless=self.headless,
+                viewport={"width": 1366, "height": 768},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 args=["--start-maximized", "--disable-blink-features=AutomationControlled"]
             )
-            context = browser.new_context(
-                viewport={"width": 1366, "height": 768},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page: Page = context.new_page()
+            page: Page = context.pages[0] if context.pages else context.new_page()
 
             # Step 1: Navigate to /upload-art
             self.log("INFO", "Step 1: Navigating to https://www.teepublic.com/upload-art ...")
@@ -154,13 +155,13 @@ class TeePublicAutomation:
             if "login" in curr_url or "sign_in" in curr_url or "challenge" in curr_url or "just a moment" in page_title:
                 self.log("WARNING", "TeePublic requires login or Cloudflare verification in this browser.")
                 self.log("INFO", "Waiting up to 60s for you to complete verification / login...")
-                self.log("TIP", "Or use the 1-Click Browser Extension directly in your logged-in browser (Brave/Chrome)!")
+                self.log("TIP", "Or use the 1-Click Browser Extension directly in your logged-in browser (Brave/Chrome/Tor)!")
                 try:
-                    page.wait_for_selector('input[type="file"]', timeout=60000)
+                    page.wait_for_selector('input[type="file"], button:has-text("Multi-File Upload")', timeout=60000)
                     self.log("SUCCESS", "Upload page ready! Continuing with upload...")
                 except Exception:
-                    self.log("WARNING", "Verification wait timed out. Attempting to proceed with /upload-art...")
-                    page.goto("https://www.teepublic.com/upload-art", timeout=30000)
+                    self.log("ERROR", "Verification wait timed out and upload form is not accessible. Aborting cleanly.")
+                    return False
 
             if self.stop_requested:
                 return False
@@ -373,8 +374,22 @@ class TeePublicAutomation:
 
         finally:
             self.is_running = False
-            # Keep browser open a bit so user can inspect final result
-            time.sleep(3)
+            # Safely close context, browser, and stop playwright instance to prevent process/memory leaks
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            if playwright_instance:
+                try:
+                    playwright_instance.stop()
+                except Exception:
+                    pass
 
     def _fill_design_form(
         self,
@@ -446,23 +461,35 @@ class TeePublicAutomation:
             except Exception:
                 continue
 
-        # f. Fill "Supporting Tags" textarea
-        supp_selectors = [
-            'textarea[name="design[secondary_tags]"]',
-            'input[name="design[secondary_tags]"]',
-            'textarea[name*="secondary" i]',
-            'textarea[name*="tag" i]',
-            '#design_secondary_tags',
-            '#supporting_tags',
-            'input[placeholder*="Supporting Tags" i]'
-        ]
-        for sel in supp_selectors:
-            try:
-                if page.is_visible(sel):
-                    page.fill(sel, supporting_tags)
-                    break
-            except Exception:
-                continue
+        # f. Fill Supporting Tags by tokenizing and dispatching tag events
+        if supporting_tags:
+            tag_list = [t.strip().lstrip('#') for t in supporting_tags.split(",") if t.strip()]
+            sec_input_selectors = [
+                '#secondary_tags input.taggle_input',
+                '#secondary_tags input',
+                'input[name="design[secondary_tags]"]',
+                'textarea[name="design[secondary_tags]"]',
+                '#design_secondary_tags',
+                '#supporting_tags'
+            ]
+            sec_sel = None
+            for sel in sec_input_selectors:
+                try:
+                    if page.is_visible(sel):
+                        sec_sel = sel
+                        break
+                except Exception:
+                    continue
+
+            if sec_sel:
+                for tag in tag_list:
+                    try:
+                        page.focus(sec_sel)
+                        page.type(sec_sel, tag, delay=35)
+                        page.keyboard.press("Comma")
+                        time.sleep(0.08)
+                    except Exception:
+                        pass
 
         # g. Set Mature Content (Yes / No)
         mature = str(design.get("mature_content", "no")).strip().lower()
@@ -533,16 +560,136 @@ class TeePublicAutomation:
             except Exception:
                 continue
 
-        # j. Enable all product toggles that are ON by default
+        # j. Accurately synchronize product toggles based on user studio settings
         product_toggles = design.get("product_toggles", {})
+        apparel_settings = design.get("apparel_settings", {})
+
+        # 1. Apparel table rows (.apparel-options tr, tr[data-canvas])
+        try:
+            apparel_rows = page.query_selector_all('.apparel-options tr, tr[data-canvas]')
+            for row in apparel_rows:
+                raw_name = row.get_attribute('data-name') or ''
+                if not raw_name:
+                    continue
+                is_enabled = True
+                for key, val in apparel_settings.items():
+                    if key.lower() == raw_name.lower() and isinstance(val, dict) and "enabled" in val:
+                        is_enabled = val["enabled"] is not False
+                        break
+                if is_enabled and raw_name in product_toggles:
+                    is_enabled = product_toggles[raw_name] is not False
+
+                toggle_container = row.query_selector('.on-off')
+                toggle_span = row.query_selector('.on-off span')
+                hidden_inp = row.query_selector('.on-off input')
+                if toggle_span:
+                    classes = toggle_span.get_attribute('class') or ''
+                    val = hidden_inp.get_attribute('value') if hidden_inp else ''
+                    currently_enabled = ('enabled' in classes) or (val == 'true')
+                    if is_enabled != currently_enabled:
+                        target = toggle_container or toggle_span
+                        target.click()
+                        time.sleep(0.05)
+        except Exception:
+            pass
+
+        # 2. Additional canvas product cards (.additional-canvases-container .canvas)
+        try:
+            canvases = page.query_selector_all('.additional-canvases-container .canvas')
+            for card in canvases:
+                canvas_name = card.get_attribute('data-canvas-name') or card.get_attribute('data-canvas') or ''
+                if not canvas_name:
+                    continue
+                lower = canvas_name.lower()
+                name_map = {
+                    'print': 'Wall Art', 'bag': 'Bags', 'hat': 'Hats',
+                    'sticker': 'Stickers', 'case': 'Cases', 'mug': 'Mugs',
+                    'pillow': 'Pillows', 'tote': 'Totes', 'tapestry': 'Tapestries',
+                    'pin': 'Pins', 'magnet': 'Magnets', 'shorts': 'Shorts'
+                }
+                target_key = name_map.get(lower, canvas_name)
+                should_enable = True
+                if target_key in product_toggles:
+                    should_enable = product_toggles[target_key] is not False
+                elif canvas_name in product_toggles:
+                    should_enable = product_toggles[canvas_name] is not False
+
+                toggle_container = card.query_selector('.on-off')
+                toggle_span = card.query_selector('.on-off span')
+                hidden_inp = card.query_selector('.on-off input')
+                if toggle_span:
+                    classes = toggle_span.get_attribute('class') or ''
+                    val = hidden_inp.get_attribute('value') if hidden_inp else ''
+                    currently_enabled = ('enabled' in classes) or (val == 'true')
+                    if should_enable != currently_enabled:
+                        target = toggle_container or toggle_span
+                        target.click()
+                        time.sleep(0.05)
+        except Exception:
+            pass
+
+        # 3. Fallback generic product checkboxes
         try:
             toggle_checkboxes = page.query_selector_all('input[type="checkbox"][name*="product" i], .product-toggle input[type="checkbox"]')
             for cb in toggle_checkboxes:
                 try:
-                    if not cb.is_checked():
+                    cb_name = cb.get_attribute("name") or cb.get_attribute("id") or ""
+                    should_be_on = True
+                    for p_name, p_state in product_toggles.items():
+                        if p_name.lower() in cb_name.lower():
+                            should_be_on = bool(p_state)
+                            break
+                    if should_be_on and not cb.is_checked():
                         cb.check()
+                    elif not should_be_on and cb.is_checked():
+                        cb.uncheck()
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+        # k. Set garment colors and all 14 background colors
+        default_color_name = design.get("default_color") or "Black"
+        norm_color = default_color_name.strip()
+        hex_color = TEEPUBLIC_COLORS.get(norm_color, "#111111")
+        if color_pref == "light" and hex_color == "#111111":
+            hex_color = "#ffffff"
+
+        try:
+            page.evaluate(f"""() => {{
+                const dropper = document.getElementById('dropperInput');
+                if (dropper) {{
+                    dropper.value = '{hex_color}';
+                    dropper.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    dropper.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+                const applyAll = document.querySelector('.jsColorDropperApplyToAll');
+                if (applyAll) applyAll.click();
+
+                const bgSels = [
+                    '#design_mockup_config_print_attributes_bg_color',
+                    '#design_mockup_config_case_attributes_bg_color',
+                    '#design_mockup_config_socks_attributes_bg_color',
+                    '#design_mockup_config_coffee_mug_attributes_bg_color',
+                    '#design_mockup_config_travel_mug_attributes_bg_color',
+                    '#design_mockup_config_sticker_attributes_bg_color',
+                    '#design_mockup_config_pillow_attributes_bg_color',
+                    '#design_mockup_config_tote_attributes_bg_color',
+                    '#design_mockup_config_tapestry_attributes_bg_color',
+                    '#design_mockup_config_small_tapestry_attributes_bg_color',
+                    '#design_mockup_config_pin_attributes_bg_color',
+                    '#magnet_pin_bg_color',
+                    '#design_mockup_config_magnet_attributes_bg_color',
+                    '#design_mockup_config_card_attributes_bg_color',
+                    '.jsUploaderColor'
+                ];
+                document.querySelectorAll(bgSels.join(', ')).forEach(el => {{
+                    el.value = '{hex_color}';
+                    el.setAttribute('value', '{hex_color}');
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }});
+            }}""")
         except Exception:
             pass
 

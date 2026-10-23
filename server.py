@@ -162,15 +162,19 @@ class AppState:
                 is_ready = bool(item.is_matched and has_thumb)
                 designs_data.append({
                     "index": i + 1,
+                    "zero_index": i,
+                    "id": i,
                     "tracker_id": f"#{i + 1:02d}",
                     "file_name": item.file_name,
+                    "original_filename": getattr(item, "original_filename", item.file_name) or item.file_name,
                     "title": item.title,
                     "main_tag": item.main_tag,
                     "supporting_tags": item.supporting_tags,
                     "description": item.description,
                     "file_path": item.file_path or "",
                     "is_matched": is_ready,
-                    "status": "Confirmed" if is_ready else "Missing",
+                    "status": "Confirmed" if is_ready else ("Warning" if getattr(item, "validation_warning", None) else "Missing"),
+                    "validation_warning": getattr(item, "validation_warning", None),
                     "has_thumbnail": has_thumb,
                     "default_color": settings.get("product_colors", {}).get("T-Shirt") or settings.get("apparel_settings", {}).get("T-Shirt", {}).get("defaultColor") or "Black",
                     "color_preference": settings.get("color_preference", "all"),
@@ -211,21 +215,22 @@ class AppState:
 state = AppState()
 
 def execute_matching():
-    if not state.designs:
-        return
+    with state.lock:
+        if not state.designs:
+            return
 
-    os.makedirs(ARTWORK_DIR, exist_ok=True)
-    if not state.folder_path or not os.path.isdir(state.folder_path):
-        state.folder_path = os.path.abspath(ARTWORK_DIR)
+        os.makedirs(ARTWORK_DIR, exist_ok=True)
+        if not state.folder_path or not os.path.isdir(state.folder_path):
+            state.folder_path = os.path.abspath(ARTWORK_DIR)
 
-    summary = match_designs_with_folder(state.designs, state.folder_path, state.csv_path)
-    state.summary = summary
-    state.set_progress(summary.matched_count, summary.total_csv_rows)
-    state.add_log("INFO", f"Matching: {summary.matched_count} Confirmed ✓ | {summary.missing_count} Awaiting Image")
-    if summary.matched_count > 0:
-        state.add_log("SUCCESS", f"{summary.matched_count} design(s) confirmed with artwork!")
-    if summary.missing_count > 0:
-        state.add_log("INFO", f"{summary.missing_count} listing(s) awaiting artwork image.")
+        summary = match_designs_with_folder(state.designs, state.folder_path, state.csv_path)
+        state.summary = summary
+        state.set_progress(summary.matched_count, summary.total_csv_rows)
+        state.add_log("INFO", f"Matching: {summary.matched_count} Confirmed ✓ | {summary.missing_count} Awaiting Image")
+        if summary.matched_count > 0:
+            state.add_log("SUCCESS", f"{summary.matched_count} design(s) confirmed with artwork!")
+        if summary.missing_count > 0:
+            state.add_log("INFO", f"{summary.missing_count} listing(s) awaiting artwork image.")
 
 def load_csv_data(csv_file: str, folder: str = "", source: str = "", append: bool = False):
     csv_name = os.path.basename(csv_file)
@@ -251,40 +256,58 @@ def load_csv_data(csv_file: str, folder: str = "", source: str = "", append: boo
                 item.index = start_index + idx + 1
                 state.designs.append(item)
 
-        state.add_log("SUCCESS", f"Loaded {len(items)} listing(s) from {csv_name}. Total listings: {len(state.designs)}.")
+            state.add_log("SUCCESS", f"Loaded {len(items)} listing(s) from {csv_name}. Total listings: {len(state.designs)}.")
 
-        target_folder = folder or state.folder_path
-        if target_folder and os.path.isdir(target_folder):
-            state.folder_path = os.path.abspath(target_folder)
-            execute_matching()
-        else:
-            state.summary = ValidationSummary(
-                total_csv_rows=len(state.designs),
-                matched_count=0,
-                missing_count=len(state.designs),
-                csv_path=state.csv_path
-            )
-            state.set_progress(0, len(state.designs))
+            target_folder = folder or state.folder_path
+            if target_folder and os.path.isdir(target_folder):
+                state.folder_path = os.path.abspath(target_folder)
+                execute_matching()
+            else:
+                state.summary = ValidationSummary(
+                    total_csv_rows=len(state.designs),
+                    matched_count=0,
+                    missing_count=len(state.designs),
+                    csv_path=state.csv_path
+                )
+                state.set_progress(0, len(state.designs))
 
     except Exception as e:
         state.add_log("ERROR", f"Failed to parse CSV {csv_name}: {str(e)}")
 
 # ================= CORS & PREFLIGHT =================
 
+def is_allowed_origin(origin: Optional[str]) -> bool:
+    if not origin:
+        return True
+    origin_lower = origin.lower()
+    if origin_lower.startswith("http://127.0.0.1") or origin_lower.startswith("http://localhost"):
+        return True
+    if origin_lower.startswith("chrome-extension://") or origin_lower.startswith("moz-extension://"):
+        return True
+    return False
+
 @app.before_request
 def handle_options_preflight():
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+        origin = request.headers.get("Origin")
+        if is_allowed_origin(origin) and origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, X-API-Key"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+    origin = request.headers.get("Origin")
+    if is_allowed_origin(origin) and origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, X-API-Key"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
 # ================= FLASK ROUTES =================
@@ -391,12 +414,25 @@ def upload_csv():
         if single_path:
             paths.append(single_path)
         if paths:
-            if not append_mode:
-                state.clear_all(wipe_disk=False)
-            for idx, p in enumerate(paths):
-                if os.path.isfile(p):
+            allowed_dirs = [os.path.abspath(UPLOAD_DIR), os.path.abspath(os.getcwd())]
+            valid_paths = []
+            for p in paths:
+                abs_p = os.path.abspath(p)
+                if not any(abs_p.startswith(d + os.sep) or abs_p == d for d in allowed_dirs):
+                    state.add_log("WARNING", f"Rejected unauthorized file path: {p}")
+                    continue
+                if os.path.isfile(abs_p) and abs_p.lower().endswith(".csv"):
+                    valid_paths.append(abs_p)
+                else:
+                    state.add_log("WARNING", f"CSV file not found or invalid: {p}")
+
+            if valid_paths:
+                if not append_mode:
+                    state.clear_all(wipe_disk=False)
+                for idx, p in enumerate(valid_paths):
                     load_csv_data(p, state.folder_path, source="Path Input", append=(append_mode or idx > 0))
-            return jsonify(state.to_dict())
+                return jsonify(state.to_dict())
+            return jsonify({"error": "No valid CSV files found in authorized paths"}), 400
 
     files = request.files.getlist("files") or request.files.getlist("file")
     if not files:
@@ -411,16 +447,24 @@ def upload_csv():
         state.clear_all(wipe_disk=False)
 
     loaded_any = False
+    upload_dir_abs = os.path.abspath(UPLOAD_DIR)
     for idx, f in enumerate(files):
         if f and f.filename:
-            save_path = os.path.join(UPLOAD_DIR, f.filename)
+            safe_name = secure_filename(os.path.basename(f.filename))
+            if not safe_name.lower().endswith(".csv"):
+                continue
+            save_path = os.path.abspath(os.path.join(UPLOAD_DIR, safe_name))
+            if not save_path.startswith(upload_dir_abs + os.sep) and save_path != upload_dir_abs:
+                state.add_log("ERROR", f"Path traversal attempt rejected: {f.filename}")
+                continue
+
             f.save(save_path)
-            state.add_log("SUCCESS", f"Received listings CSV: {f.filename}")
+            state.add_log("SUCCESS", f"Received listings CSV: {safe_name}")
             load_csv_data(save_path, state.folder_path, source="CSV Upload", append=(append_mode or idx > 0))
             loaded_any = True
 
     if not loaded_any:
-        return jsonify({"error": "Empty file(s)"}), 400
+        return jsonify({"error": "Empty or invalid CSV file(s)"}), 400
 
     return jsonify(state.to_dict())
 
@@ -442,46 +486,53 @@ def upload_images():
     saved_files = []
     for f in files:
         if f and f.filename:
-            base_name = os.path.basename(f.filename)
-            ext = os.path.splitext(base_name)[1].lower()
-            if ext in IMAGE_EXTENSIONS or not ext:
-                dest = os.path.join(ARTWORK_DIR, base_name)
+            raw_base = os.path.basename(f.filename)
+            safe_base = secure_filename(raw_base) or f"artwork_{int(time.time()*1000)}.png"
+            ext = os.path.splitext(safe_base)[1].lower()
+            if ext in IMAGE_EXTENSIONS:
+                dest = os.path.join(ARTWORK_DIR, safe_base)
+                # Avoid collision if file already exists
+                if os.path.exists(dest):
+                    stem, ext_part = os.path.splitext(safe_base)
+                    safe_base = f"{stem}_{int(time.time()*1000)}{ext_part}"
+                    dest = os.path.join(ARTWORK_DIR, safe_base)
                 f.save(dest)
-                saved_files.append((base_name, os.path.abspath(dest)))
+                saved_files.append((raw_base, os.path.abspath(dest)))
 
-    # Step 1: Match by filename or stem using match_designs_with_folder
-    match_designs_with_folder(state.designs, state.folder_path, state.csv_path)
+    with state.lock:
+        # Step 1: Match by filename or stem using match_designs_with_folder
+        match_designs_with_folder(state.designs, state.folder_path, state.csv_path)
 
-    # Step 2: For any designs still missing artwork, assign remaining saved files sequentially
-    # This solves the workflow where magic listing export CSVs have arbitrary filenames that don't match image names
-    unmatched_files = [
-        path for name, path in saved_files
-        if not any(d.file_path == path for d in state.designs)
-    ]
+        # Step 2: Only perform sequential fallback if explicitly requested by user
+        sequential = str(request.form.get("sequential") or request.args.get("sequential", "")).lower() in ("true", "1", "yes")
+        if sequential:
+            unmatched_files = [
+                path for name, path in saved_files
+                if not any(d.file_path == path for d in state.designs)
+            ]
+            file_ptr = 0
+            for d in state.designs:
+                if not d.is_matched or not d.file_path or not os.path.isfile(d.file_path):
+                    if file_ptr < len(unmatched_files):
+                        d.file_path = unmatched_files[file_ptr]
+                        d.file_name = os.path.basename(unmatched_files[file_ptr])
+                        d.is_matched = True
+                        d.status = "Confirmed"
+                        file_ptr += 1
 
-    file_ptr = 0
-    for d in state.designs:
-        if not d.is_matched or not d.file_path or not os.path.isfile(d.file_path):
-            if file_ptr < len(unmatched_files):
-                d.file_path = unmatched_files[file_ptr]
-                d.file_name = os.path.basename(unmatched_files[file_ptr])
-                d.is_matched = True
-                d.status = "Confirmed"
-                file_ptr += 1
-
-    matched = sum(1 for d in state.designs if d.file_path and os.path.isfile(d.file_path))
-    missing = len(state.designs) - matched
-    state.summary = ValidationSummary(
-        total_csv_rows=len(state.designs),
-        matched_count=matched,
-        missing_count=missing,
-        folder_png_count=len(os.listdir(ARTWORK_DIR)),
-        folder_path=state.folder_path,
-        csv_path=state.csv_path
-    )
-    state.set_progress(matched, len(state.designs))
-    state.add_log("SUCCESS", f"Imported {len(saved_files)} artwork image(s). Matching: {matched} Confirmed ✓ | {missing} Awaiting Image")
-    return jsonify(state.to_dict())
+        matched = sum(1 for d in state.designs if d.file_path and os.path.isfile(d.file_path))
+        missing = len(state.designs) - matched
+        state.summary = ValidationSummary(
+            total_csv_rows=len(state.designs),
+            matched_count=matched,
+            missing_count=missing,
+            folder_png_count=len(os.listdir(ARTWORK_DIR)),
+            folder_path=state.folder_path,
+            csv_path=state.csv_path
+        )
+        state.set_progress(matched, len(state.designs))
+        state.add_log("SUCCESS", f"Imported {len(saved_files)} artwork image(s). Matching: {matched} Confirmed ✓ | {missing} Awaiting Image")
+        return jsonify(state.to_dict())
 
 @app.route("/api/upload-single-image", methods=["POST"])
 def upload_single_image():
@@ -499,59 +550,64 @@ def upload_single_image():
     if not state.folder_path or not os.path.isdir(state.folder_path):
         state.folder_path = os.path.abspath(ARTWORK_DIR)
 
-    if 0 <= idx < len(state.designs):
-        attached_count = 0
-        for offset, f in enumerate(files):
-            target_idx = idx + offset
-            if target_idx >= len(state.designs):
-                break
-            if not f or not f.filename:
-                continue
+    with state.lock:
+        if 0 <= idx < len(state.designs):
+            attached_count = 0
+            for offset, f in enumerate(files):
+                target_idx = idx + offset
+                if target_idx >= len(state.designs):
+                    break
+                if not f or not f.filename:
+                    continue
 
-            orig_filename = os.path.basename(f.filename)
-            ext = os.path.splitext(orig_filename)[1]
-            if not ext:
-                ext = ".png"
+                orig_filename = os.path.basename(f.filename)
+                ext = os.path.splitext(orig_filename)[1].lower()
+                if not ext:
+                    ext = ".png"
+                if ext not in IMAGE_EXTENSIONS:
+                    continue
 
-            # Use a safe, unique file path on disk to avoid collisions
-            safe_basename = secure_filename(orig_filename) or f"artwork_{target_idx + 1}{ext}"
-            unique_name = f"row_{target_idx + 1}_{safe_basename}"
-            dest = os.path.join(ARTWORK_DIR, unique_name)
-            f.save(dest)
-            abs_dest = os.path.abspath(dest)
-
-            design = state.designs[target_idx]
-            design.file_path = abs_dest
-            design.file_name = orig_filename
-            design.is_matched = True
-            design.status = "Confirmed"
-            attached_count += 1
-
-        matched = sum(1 for d in state.designs if d.file_path and os.path.isfile(d.file_path))
-        missing = len(state.designs) - matched
-        state.summary = ValidationSummary(
-            total_csv_rows=len(state.designs),
-            matched_count=matched,
-            missing_count=missing,
-            folder_png_count=len(os.listdir(ARTWORK_DIR)),
-            folder_path=state.folder_path,
-            csv_path=state.csv_path
-        )
-        state.set_progress(matched, len(state.designs))
-        design = state.designs[idx]
-        state.add_log("SUCCESS", f"Attached artwork image to Design #{idx + 1} ({design.file_name}) - Confirmed ✓")
-    else:
-        saved_count = 0
-        for f in files:
-            if f and f.filename:
-                base_name = os.path.basename(f.filename)
-                dest = os.path.join(ARTWORK_DIR, base_name)
+                # Use a safe, unique file path on disk to avoid collisions
+                safe_basename = secure_filename(orig_filename) or f"artwork_{target_idx + 1}{ext}"
+                unique_name = f"row_{target_idx + 1}_{int(time.time()*1000)}_{safe_basename}"
+                dest = os.path.join(ARTWORK_DIR, unique_name)
                 f.save(dest)
-                saved_count += 1
-        execute_matching()
-        state.add_log("SUCCESS", f"Imported {saved_count} artwork images.")
+                abs_dest = os.path.abspath(dest)
 
-    return jsonify(state.to_dict())
+                design = state.designs[target_idx]
+                design.file_path = abs_dest
+                design.file_name = orig_filename
+                design.is_matched = True
+                design.status = "Confirmed"
+                attached_count += 1
+
+            matched = sum(1 for d in state.designs if d.file_path and os.path.isfile(d.file_path))
+            missing = len(state.designs) - matched
+            state.summary = ValidationSummary(
+                total_csv_rows=len(state.designs),
+                matched_count=matched,
+                missing_count=missing,
+                folder_png_count=len(os.listdir(ARTWORK_DIR)),
+                folder_path=state.folder_path,
+                csv_path=state.csv_path
+            )
+            state.set_progress(matched, len(state.designs))
+            design = state.designs[idx]
+            state.add_log("SUCCESS", f"Attached artwork image to Design #{idx + 1} ({design.file_name}) - Confirmed ✓")
+        else:
+            saved_count = 0
+            for f in files:
+                if f and f.filename:
+                    base_name = secure_filename(os.path.basename(f.filename))
+                    ext = os.path.splitext(base_name)[1].lower()
+                    if ext in IMAGE_EXTENSIONS:
+                        dest = os.path.join(ARTWORK_DIR, base_name)
+                        f.save(dest)
+                        saved_count += 1
+            execute_matching()
+            state.add_log("SUCCESS", f"Imported {saved_count} artwork images.")
+
+        return jsonify(state.to_dict())
 
 @app.route("/api/apply-color-preset", methods=["POST"])
 def apply_color_preset():
@@ -567,16 +623,17 @@ def apply_color_preset():
     elif preset == "light":
         chosen_colors = LIGHT_COLORS_PRESET
 
-    indices_to_update = range(len(state.designs)) if apply_all else ([idx] if 0 <= idx < len(state.designs) else [])
+    with state.lock:
+        indices_to_update = range(len(state.designs)) if apply_all else ([idx] if 0 <= idx < len(state.designs) else [])
 
-    for i in indices_to_update:
-        if i not in state.design_settings:
-            state.design_settings[i] = {}
-        state.design_settings[i]["color_preference"] = preset
-        state.design_settings[i]["product_colors"] = dict(chosen_colors)
+        for i in indices_to_update:
+            if i not in state.design_settings:
+                state.design_settings[i] = {}
+            state.design_settings[i]["color_preference"] = preset
+            state.design_settings[i]["product_colors"] = dict(chosen_colors)
 
-    state.add_log("SUCCESS", f"Applied '{preset.upper()} COLORS' preset to {'all designs' if apply_all else f'Design #{idx + 1}'}.")
-    return jsonify(state.to_dict())
+        state.add_log("SUCCESS", f"Applied '{preset.upper()} COLORS' preset to {'all designs' if apply_all else f'Design #{idx + 1}'}.")
+        return jsonify(state.to_dict())
 
 @app.route("/api/update-design-field", methods=["POST"])
 def update_design_field():
@@ -585,32 +642,33 @@ def update_design_field():
     field = data.get("field", "")
     value = data.get("value", "")
 
-    if index < 0 or index >= len(state.designs):
-        return jsonify({"error": "Invalid index"}), 400
+    with state.lock:
+        if index < 0 or index >= len(state.designs):
+            return jsonify({"error": "Invalid index"}), 400
 
-    design = state.designs[index]
-    if index not in state.design_settings:
-        state.design_settings[index] = {}
+        design = state.designs[index]
+        if index not in state.design_settings:
+            state.design_settings[index] = {}
 
-    if field == "title":
-        design.title = value
-    elif field == "main_tag":
-        design.main_tag = value
-    elif field == "supporting_tags":
-        design.supporting_tags = value
-    elif field == "description":
-        design.description = value
-    else:
-        # Save any field (mature_content, print_placement, scale, album, available_colors, apparel_settings, product_colors, product_toggles, etc.)
-        parsed_val = value
-        if isinstance(value, str) and (value.startswith("{") or value.startswith("[")):
-            try:
-                parsed_val = json.loads(value)
-            except Exception:
-                parsed_val = value
-        state.design_settings[index][field] = parsed_val
+        if field == "title":
+            design.title = value
+        elif field == "main_tag":
+            design.main_tag = value
+        elif field == "supporting_tags":
+            design.supporting_tags = value
+        elif field == "description":
+            design.description = value
+        else:
+            # Save any field (mature_content, print_placement, scale, album, available_colors, apparel_settings, product_colors, product_toggles, etc.)
+            parsed_val = value
+            if isinstance(value, str) and (value.startswith("{") or value.startswith("[")):
+                try:
+                    parsed_val = json.loads(value)
+                except Exception:
+                    parsed_val = value
+            state.design_settings[index][field] = parsed_val
 
-    return jsonify({"success": True})
+        return jsonify({"success": True})
 
 @app.route("/api/copy-settings-all", methods=["POST"])
 def copy_settings_all():
@@ -634,73 +692,108 @@ def copy_settings_all():
                     else:
                         state.design_settings[i][k] = v
 
-    state.add_log("SUCCESS", f"Settings from Design #{index + 1} copied to all {len(state.designs)} designs.")
-    res = state.to_dict()
-    res["success"] = True
-    res["copied_count"] = len(state.designs)
-    return jsonify(res)
+        state.add_log("SUCCESS", f"Settings from Design #{index + 1} copied to all {len(state.designs)} designs.")
+        res = state.to_dict()
+        res["success"] = True
+        res["copied_count"] = len(state.designs)
+        return jsonify(res)
 
 @app.route("/api/run-automation", methods=["POST"])
 def run_automation():
     data = request.json or {}
     color_pref = data.get("color_preference", "all").upper()
 
-    if not state.designs:
-        state.add_log("ERROR", "No designs loaded! Import a CSV file first.")
-        return jsonify({"error": "No designs"}), 400
+    with state.lock:
+        if not state.designs:
+            state.add_log("ERROR", "No designs loaded! Import a CSV file first.")
+            return jsonify({"error": "No designs"}), 400
 
-    matched = [d for d in state.designs if d.is_matched]
-    if not matched:
-        state.add_log("ERROR", "No confirmed artwork found! Please add artwork images.")
-        return jsonify({"error": "No confirmed files"}), 400
+        matched = [d for d in state.designs if d.is_matched]
+        if not matched:
+            state.add_log("ERROR", "No confirmed artwork found! Please add artwork images.")
+            return jsonify({"error": "No confirmed files"}), 400
 
-    if state.active_automation and state.active_automation.is_running:
-        state.add_log("WARNING", "Automation is already running in background.")
-        return jsonify({"error": "Automation already running"}), 400
+        if state.active_automation and state.active_automation.is_running:
+            state.add_log("WARNING", "Automation is already running in background.")
+            return jsonify({"error": "Automation already running"}), 400
 
-    state.add_log("INFO", "=== INITIATING TEEPUBLIC AUTOMATION ===")
-    state.add_log("INFO", f"Designs: {len(state.designs)} total ({len(matched)} confirmed)")
-    state.add_log("INFO", f"Color Preference: {color_pref}")
-    state.add_log("INFO", "Target: https://www.teepublic.com/upload-art")
+        state.add_log("INFO", "=== INITIATING TEEPUBLIC AUTOMATION ===")
+        state.add_log("INFO", f"Designs: {len(state.designs)} total ({len(matched)} confirmed)")
+        state.add_log("INFO", f"Color Preference: {color_pref}")
+        state.add_log("INFO", "Target: https://www.teepublic.com/upload-art")
 
-    designs_payload = state.to_dict()["designs"]
+        designs_payload = state.to_dict()["designs"]
 
-    automation_engine = TeePublicAutomation(
-        designs=designs_payload,
-        color_preference=color_pref,
-        log_callback=state.add_log,
-        progress_callback=state.set_progress,
-        headless=False
-    )
-    state.active_automation = automation_engine
+        automation_engine = TeePublicAutomation(
+            designs=designs_payload,
+            color_preference=color_pref,
+            log_callback=state.add_log,
+            progress_callback=state.set_progress,
+            headless=False
+        )
+        state.active_automation = automation_engine
 
-    thread = threading.Thread(target=automation_engine.run, daemon=True)
-    thread.start()
+        def run_worker():
+            try:
+                automation_engine.run()
+            finally:
+                with state.lock:
+                    state.active_automation = None
 
-    return jsonify({"success": True, "matched_count": len(matched), "status": "running"})
+        thread = threading.Thread(target=run_worker, daemon=True)
+        thread.start()
+
+        return jsonify({"success": True, "matched_count": len(matched), "status": "running"})
 
 @app.route("/api/stop-automation", methods=["POST"])
 def stop_automation():
-    if state.active_automation and state.active_automation.is_running:
-        state.active_automation.request_stop()
-        state.add_log("WARNING", "Aborting automation run...")
-        return jsonify({"success": True, "status": "stopping"})
-    return jsonify({"success": True, "status": "not_running"})
+    with state.lock:
+        if state.active_automation and state.active_automation.is_running:
+            state.active_automation.request_stop()
+            state.add_log("WARNING", "Aborting automation run...")
+            return jsonify({"success": True, "status": "stopping"})
+        return jsonify({"success": True, "status": "not_running"})
 
 @app.route("/api/thumbnail/<int:index>")
 def get_thumbnail(index):
-    if 0 <= index < len(state.designs):
-        item = state.designs[index]
-        if item.file_path and os.path.isfile(item.file_path):
-            ext = os.path.splitext(item.file_path)[1].lower()
-            mime = "image/png"
-            if ext in [".jpg", ".jpeg"]:
-                mime = "image/jpeg"
-            elif ext == ".webp":
-                mime = "image/webp"
-            elif ext == ".svg":
-                mime = "image/svg+xml"
-            return send_file(item.file_path, mimetype=mime)
+    with state.lock:
+        total = len(state.designs)
+        if total == 0:
+            return ("Not found", 404)
+
+        base = request.args.get("base")
+        target_idx = None
+        if base == "1":
+            if 1 <= index <= total:
+                target_idx = index - 1
+        elif base == "0":
+            if 0 <= index < total:
+                target_idx = index
+        else:
+            # Dual 0-based and 1-based safe index mapping
+            if 0 <= index < total:
+                target_idx = index
+            elif index == total and total > 0:
+                target_idx = index - 1
+
+        if target_idx is not None and 0 <= target_idx < total:
+            item = state.designs[target_idx]
+            if item.file_path and os.path.isfile(item.file_path):
+                ext = os.path.splitext(item.file_path)[1].lower()
+                if ext not in IMAGE_EXTENSIONS or ext == ".svg":
+                    return ("Unsupported format", 400)
+                mime = "image/png"
+                if ext in [".jpg", ".jpeg"]:
+                    mime = "image/jpeg"
+                elif ext == ".webp":
+                    mime = "image/webp"
+
+                resp = send_file(item.file_path, mimetype=mime)
+                resp.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+                resp.headers["X-Content-Type-Options"] = "nosniff"
+                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                return resp
+
     return ("Not found", 404)
 
 @app.route("/api/logs", methods=["GET"])
