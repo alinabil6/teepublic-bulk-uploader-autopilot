@@ -169,7 +169,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 1-Click Autopilot
   btnFillDesign.addEventListener("click", async () => {
-    await triggerAutopilot(false);
+    await triggerAutopilot(true);
   });
 
   // Autopilot & Next
@@ -249,7 +249,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateQueueUI(currentStorage.cachedDesigns, currentStorage.activeDesignIndex);
   }
 
-  async function triggerAutopilot(advanceNext = false) {
+  async function triggerAutopilot(advanceNext = true) {
     const store = await chrome.storage.local.get({ extensionEnabled: true });
     if (store.extensionEnabled === false) {
       alert("Autopilot is currently turned OFF. Turn the toggle ON first!");

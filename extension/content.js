@@ -117,6 +117,22 @@ function suppressPageAlerts() {
   } catch (_) {}
 }
 
+// Helper functions to manage tab-isolated autopilot session lifecycle
+function markSessionActive() {
+  const now = Date.now().toString();
+  sessionStorage.setItem("TP_AUTOPILOT_SESSION_ACTIVE", "true");
+  sessionStorage.setItem("TP_AUTOPILOT_SESSION_TIME", now);
+  sessionStorage.setItem("TP_PIPELINE_CONTINUING", now);
+  sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", now);
+}
+
+function clearSessionActive() {
+  sessionStorage.removeItem("TP_AUTOPILOT_SESSION_ACTIVE");
+  sessionStorage.removeItem("TP_AUTOPILOT_SESSION_TIME");
+  sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
+  sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
+}
+
 // Initialize when page is ready
 (async function init() {
   const store = await chrome.storage.local.get({
@@ -143,48 +159,48 @@ function suppressPageAlerts() {
 
   const pageType = getPageType();
 
-  // HARD GUARANTEE: Opening Bulk Uploader directly MUST NEVER auto-run!
-  // Wait until user explicitly clicks "START AUTOPILOT" (or triggers from popup).
-  if (pageType === "BULK_DROPZONE") {
-    // Only continue if the user explicitly clicked Start in popup less than 15s ago to navigate here
-    const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 15000));
-    const continuationToken = sessionStorage.getItem("TP_PIPELINE_CONTINUING");
-    const isContinuingNav = Boolean(continuationToken && (Date.now() - parseInt(continuationToken, 10) < 30000));
+  // Check if this browser tab is currently running an active, user-authorized Autopilot session
+  const isSessionActive = sessionStorage.getItem("TP_AUTOPILOT_SESSION_ACTIVE") === "true";
+  const sessionTime = parseInt(
+    sessionStorage.getItem("TP_AUTOPILOT_SESSION_TIME") || 
+    sessionStorage.getItem("TP_PIPELINE_CONTINUING") || 
+    sessionStorage.getItem("TP_AUTOPILOT_ACTIVE_SESSION") || "0", 
+    10
+  );
+  // Session remains valid if active within the last 10 minutes (prevents stall on slow Tor/assets load)
+  const isSessionFresh = (isSessionActive || sessionTime > 0) && (Date.now() - sessionTime < 600000);
+  const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 25000));
 
-    if (isEnabled && store.pendingAutoList && (isRecentPopupNav || isContinuingNav)) {
-      await chrome.storage.local.set({ triggeredByPopupTimestamp: 0 });
-      sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
-      sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
-      showToast("🚀 TeePublic Autopilot Live! Executing upload...", "info", 2000);
+  const shouldAutoContinue = isEnabled && (store.pendingAutoList || isSessionActive) && (isSessionFresh || isRecentPopupNav);
+
+  if (shouldAutoContinue) {
+    // Keep active session tokens alive in this tab across design page transitions & reloads
+    markSessionActive();
+    await chrome.storage.local.set({
+      pendingAutoList: true,
+      triggeredByPopupTimestamp: 0,
+      advanceNextAfterFill: true
+    });
+
+    if (pageType === "BULK_DROPZONE") {
+      showToast("🚀 TeePublic Autopilot Live! Processing bulk batch...", "info", 2000);
       setTimeout(() => {
-        executeMasterWorkflow(store.advanceNextAfterFill || false);
-      }, 1200);
-      return;
+        executeMasterWorkflow(true);
+      }, 400);
+    } else if (pageType === "DESIGN_EDIT") {
+      showToast("🚀 Continuing Autopilot to next design...", "info", 2000);
+      setTimeout(() => {
+        executeMasterWorkflow(true);
+      }, 400);
+    } else {
+      setTimeout(() => {
+        window.location.href = "https://www.teepublic.com/designs/bulk_uploader";
+      }, 400);
     }
-
-    // Direct window open, tab restore, or manual visit: NEVER auto-run!
-    await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
-    sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
-    sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
-    return;
-  }
-
-  // For DESIGN_EDIT: Only auto-continue if this edit page is an active continuation
-  // of an upload just completed in Bulk Uploader (< 90 seconds ago)
-  const continuationToken = sessionStorage.getItem("TP_PIPELINE_CONTINUING");
-  const isContinuingPipeline = Boolean(continuationToken && (Date.now() - parseInt(continuationToken, 10) < 90000));
-
-  if (isEnabled && store.pendingAutoList && isContinuingPipeline && pageType === "DESIGN_EDIT") {
-    sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
-    showToast("🚀 Continuing Autopilot to listing metadata...", "info", 2000);
-    setTimeout(() => {
-      executeMasterWorkflow(store.advanceNextAfterFill || false);
-    }, 1200);
   } else {
-    // Direct window open or fresh navigation: NEVER auto-run without user clicking!
+    // Direct window open, fresh manual visit, or tab restore when idle: NEVER auto-run!
     await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
-    sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
-    sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
+    clearSessionActive();
   }
 })();
 
@@ -203,13 +219,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "START_AUTO_LISTING") {
-    handleAutoListTrigger(Boolean(message.advanceNext));
+    handleAutoListTrigger(message.advanceNext !== false);
     sendResponse({ success: true, started: true });
     return true;
   }
 
   if (message.action === "AUTOFILL_DESIGN") {
-    handleAutoListTrigger(false);
+    handleAutoListTrigger(true);
     sendResponse({ success: true });
     return true;
   }
@@ -253,21 +269,9 @@ function getPageType() {
     return "BULK_DROPZONE";
   }
 
-  // If on /designs/<id>/edit:
+  // If on design editor: /designs/<id>/edit or /designs/.../edit
   if (path.includes("/designs/") && path.includes("/edit")) {
-    // Check if the page is showing an empty "Upload A Design" dropzone (no artwork uploaded yet!)
-    const emptyDropzone = document.querySelector('.m-uploader__dropzone-message, .jsUploaderDropzone, a[href*="bulk_uploader"]');
-    const hasArtworkLoaded = document.querySelector('.img_holder img, .current-artwork, .mockup-display-preview.front[style*="url"], [data-canvas="tshirt"] img');
-
-    if (emptyDropzone && !hasArtworkLoaded) {
-      // Artwork is not loaded yet! Must go to Bulk Uploader!
-      return "NAVIGATE_TO_BULK";
-    }
-
-    // If artwork is loaded and form title exists:
-    if (document.querySelector('#design_design_title, input[name="design[design_title]"]')) {
-      return "DESIGN_EDIT";
-    }
+    return "DESIGN_EDIT";
   }
 
   // Any other page (Store, Profile, Landing, or Empty Upload): Go to Bulk Uploader!
@@ -275,7 +279,7 @@ function getPageType() {
 }
 
 // Master Entry Point
-async function handleAutoListTrigger(advanceNext = false) {
+async function handleAutoListTrigger(advanceNext = true) {
   const store = await chrome.storage.local.get({ extensionEnabled: true });
   if (store.extensionEnabled === false) {
     showToast("⚠️ Autopilot is turned OFF. Turn the toggle ON to start.", "warning", 3000);
@@ -289,7 +293,12 @@ async function handleAutoListTrigger(advanceNext = false) {
 
   // Explicit user trigger: open HUD to view live progress & authorize session token
   openHUD();
-  sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
+  markSessionActive();
+
+  await chrome.storage.local.set({
+    pendingAutoList: true,
+    advanceNextAfterFill: advanceNext
+  });
 
   const pageType = getPageType();
 
@@ -297,12 +306,6 @@ async function handleAutoListTrigger(advanceNext = false) {
   if (pageType === "NAVIGATE_TO_BULK") {
     updateTracker(1, 15, "Autopilot navigating to TeePublic Bulk Uploader...");
     showToast("📍 Navigating to TeePublic Bulk Uploader...", "info", 2000);
-
-    sessionStorage.setItem("TP_PIPELINE_CONTINUING", Date.now().toString());
-    await chrome.storage.local.set({
-      pendingAutoList: true,
-      advanceNextAfterFill: advanceNext
-    });
 
     const topUploadBtn = document.querySelector('a[href*="bulk"], a[data-rudderstack-event-type="cta"], .vc-header__upload-art, a.btn-upload');
     const multiFileLink = document.querySelector('a[href*="bulk_uploader"], [data-rudderstack-link-label="Use Multi-File Uploader"]');
@@ -326,7 +329,7 @@ async function handleAutoListTrigger(advanceNext = false) {
 // MASTER RECREATED AUTOPILOT WORKFLOW (LIVE HUMAN NAVIGATION)
 // ===================================================================
 
-async function executeMasterWorkflow(advanceNext = false) {
+async function executeMasterWorkflow(advanceNext = true) {
   isListingInProgress = true;
   updateHUDStatus("running", "⚙️ AUTOPILOT RUNNING");
 
@@ -465,7 +468,7 @@ async function executeMasterWorkflow(advanceNext = false) {
       }
 
       // Keep pending flag & session token so on the next page it resumes automatically!
-      sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
+      markSessionActive();
       await chrome.storage.local.set({
         pendingAutoList: true,
         advanceNextAfterFill: advanceNext
@@ -664,8 +667,8 @@ async function executeMasterWorkflow(advanceNext = false) {
         showToast("⏳ Processing design batch... Waiting for listing editor to load...", "info", 3000);
 
         // Set pipeline continuing token so the subsequent edit form knows it was user-triggered
-        sessionStorage.setItem("TP_PIPELINE_CONTINUING", Date.now().toString());
-        await chrome.storage.local.set({ pendingAutoList: true });
+        markSessionActive();
+        await chrome.storage.local.set({ pendingAutoList: true, advanceNextAfterFill: true });
 
         for (let wait = 0; wait < 120; wait++) {
           forceClickGetStarted(detectedBtnObj);
@@ -695,17 +698,29 @@ async function executeMasterWorkflow(advanceNext = false) {
     // ===============================================================
     updateTracker(4, 65, "Waiting for Listing Form to load...");
 
-    // Wait up to 20 seconds for the form to actually exist on the page!
+    // Wait up to 30 seconds for the form to actually exist on the page (handles slow asset downloads in Tor/Brave)
     let titleEl = null;
-    for (let wait = 0; wait < 40; wait++) {
+    for (let wait = 0; wait < 60; wait++) {
       titleEl = document.querySelector('#design_design_title, input[name="design[design_title]"]');
       if (titleEl) break;
+      if (wait % 10 === 0 && wait > 0) {
+        updateTracker(4, 65, `Waiting for Listing Form (${Math.round((60 - wait) * 0.5)}s remaining)...`);
+      }
       await sleep(500);
     }
 
     if (!titleEl) {
-      showToast("⚠️ Listing form is still loading. Please wait...", "warning", 3000);
-      updateTracker(4, 65, "Waiting for form...");
+      showToast("⚠️ Listing form is still loading. Retrying...", "warning", 3000);
+      for (let retry = 0; retry < 30; retry++) {
+        titleEl = document.querySelector('#design_design_title, input[name="design[design_title]"]');
+        if (titleEl) break;
+        await sleep(500);
+      }
+    }
+
+    if (!titleEl) {
+      showToast("⚠️ Form loading timed out. Click Start Autopilot to retry.", "warning", 4000);
+      updateTracker(4, 65, "Timed out waiting for form");
       isListingInProgress = false;
       return;
     }
@@ -735,10 +750,11 @@ async function executeMasterWorkflow(advanceNext = false) {
     }
 
     // Keep session active for the next design in the pipeline
-    sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
+    markSessionActive();
     await chrome.storage.local.set({
       activeDesignIndex: curIdx,
-      pendingAutoList: true
+      pendingAutoList: true,
+      advanceNextAfterFill: true
     });
 
     updateHUDLabels(design, curIdx, totalCount);
@@ -1344,7 +1360,7 @@ function showPublishNoticeModal(meta) {
 
       <div class="notice-actions">
         <button class="notice-btn-publish" id="btnNoticePublish">
-          <span id="noticePublishText">${nextBtnLabel} (3s)</span>
+          <span id="noticePublishText">${nextBtnLabel} (1s)</span>
         </button>
         <button class="notice-btn-dismiss" id="btnNoticeDismiss">
           ⏸️ Pause & Inspect
@@ -1355,13 +1371,13 @@ function showPublishNoticeModal(meta) {
 
   requestAnimationFrame(() => modal.classList.add("visible"));
 
-  let countdown = 3;
+  let countdown = 1;
   let countdownTimer = null;
 
-  function doSubmit() {
+  async function doSubmit() {
     if (countdownTimer) clearInterval(countdownTimer);
     modal.classList.remove("visible");
-    executePublishClick(meta);
+    await executePublishClick(meta);
   }
 
   countdownTimer = setInterval(() => {
@@ -1380,9 +1396,12 @@ function showPublishNoticeModal(meta) {
     }
   }, 1000);
 
-  document.getElementById("btnNoticeDismiss").onclick = () => {
+  document.getElementById("btnNoticeDismiss").onclick = async () => {
     if (countdownTimer) clearInterval(countdownTimer);
     modal.classList.remove("visible");
+    clearSessionActive();
+    await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
+    isListingInProgress = false;
     showToast("⏸️ Autopilot paused for inspection. Click Publish button when ready.", "info", 3000);
   };
 
@@ -1391,7 +1410,7 @@ function showPublishNoticeModal(meta) {
   };
 }
 
-function executePublishClick(meta) {
+async function executePublishClick(meta) {
   const publishBtn = findPublishButton();
 
   if (publishBtn) {
@@ -1401,33 +1420,34 @@ function executePublishClick(meta) {
     if (meta.isBulkMode) {
       if (!meta.isLastDesign) {
         showToast(`🎉 Submitting Design #${meta.curIdx + 1}... Advancing to Design #${meta.curIdx + 2}`, "success", 2500);
-        sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
-        chrome.storage.local.set({
+        markSessionActive();
+        await chrome.storage.local.set({
           pendingAutoList: true,
+          advanceNextAfterFill: true,
           activeDesignIndex: meta.curIdx + 1
         });
       } else {
         showToast("🎉 Final design submitted! Publishing entire batch to TeePublic...", "success", 4000);
-        sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
-        chrome.storage.local.set({ pendingAutoList: false });
+        clearSessionActive();
+        await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
       }
     } else {
       if (meta.advanceNext && meta.curIdx < meta.totalCount - 1) {
         const nextIdx = meta.curIdx + 1;
-        sessionStorage.setItem("TP_AUTOPILOT_ACTIVE_SESSION", Date.now().toString());
-        chrome.storage.local.set({ activeDesignIndex: nextIdx, pendingAutoList: true });
+        markSessionActive();
+        await chrome.storage.local.set({ activeDesignIndex: nextIdx, pendingAutoList: true, advanceNextAfterFill: true });
         setTimeout(() => {
           window.location.href = "https://www.teepublic.com/designs/bulk_uploader";
-        }, 1500);
+        }, 1200);
       } else {
-        sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
-        chrome.storage.local.set({ pendingAutoList: false });
+        clearSessionActive();
+        await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
       }
     }
 
     setTimeout(() => {
       publishBtn.click();
-    }, 600);
+    }, 400);
   } else {
     showToast("✓ Ready! Click the green Publish button at the bottom of the page.", "success", 4000);
   }
@@ -1579,7 +1599,7 @@ function mountHUD(store) {
   });
 
   document.getElementById("btnHudFill").addEventListener("click", () => {
-    handleAutoListTrigger(false);
+    handleAutoListTrigger(true);
   });
 
   document.getElementById("btnHudNext").addEventListener("click", () => {
@@ -1592,7 +1612,10 @@ function mountHUD(store) {
   if (toggleInput) {
     toggleInput.addEventListener("change", (e) => {
       const active = e.target.checked;
-      chrome.storage.local.set({ extensionEnabled: active, pendingAutoList: false });
+      chrome.storage.local.set({ extensionEnabled: active, pendingAutoList: false, advanceNextAfterFill: false });
+      if (!active) {
+        clearSessionActive();
+      }
       applyHUDEnabledState(active);
       if (active) {
         attachKeyboardShortcuts();
@@ -1819,14 +1842,24 @@ function getBulkEditorProgress() {
 }
 
 function findPublishButton() {
+  // 1. Bulk uploader explicit submit buttons
+  const bulkNext = document.querySelector('input[type="submit"][value*="Next"], button[value*="Next"], input.btn--next, .btn-next-design');
+  if (bulkNext) return bulkNext;
+
   const bulkSubmit = document.querySelector('input[type="submit"][value="Publish All"], input.save-publish-later-button[value="Publish All"], input.save-publish-later-button');
   if (bulkSubmit) return bulkSubmit;
 
+  // 2. Publish and promote button
   const publishBtn = document.querySelector('button.publish-and-promote-button, button[value="publish"]');
   if (publishBtn) return publishBtn;
 
-  const greenBtn = document.querySelector('.save-publish-later-button.btn--green, input[type="submit"].btn--green, button.btn--green');
+  // 3. Green CTA submit button
+  const greenBtn = document.querySelector('.save-publish-later-button.btn--green, input[type="submit"].btn--green, button.btn--green, input[type="submit"].btn--primary, button.btn--primary');
   if (greenBtn) return greenBtn;
+
+  // 4. Any submit button in the design form
+  const formSubmit = document.querySelector('form.edit_design input[type="submit"], form#edit_design input[type="submit"], form[action*="/designs/"] input[type="submit"], form[action*="/designs/"] button[type="submit"]');
+  if (formSubmit) return formSubmit;
 
   return null;
 }
