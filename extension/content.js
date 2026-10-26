@@ -777,10 +777,10 @@ async function executeMasterWorkflow(advanceNext = true) {
       await humanType(mainTagEl, mainTagVal, `✓ Setting Main Tag [${mainTagVal}]`);
     }
 
-    // 3. Supporting Tags (Live Tag-by-Tag from TeePublic Autocomplete Suggestions)
+    // 3. Supporting Tags (Live Tag-by-Tag with 100% Studio Fidelity)
     const suppTagsVal = design.supporting_tags || "";
     if (suppTagsVal) {
-      await fillSupportingTagsWithSuggestionsLive(suppTagsVal);
+      await fillSupportingTagsWithSuggestionsLive(suppTagsVal, mainTagVal);
     }
 
     // 4. Live Typing Description
@@ -910,7 +910,18 @@ async function humanType(el, text, toastMsg) {
 // SUPPORTING TAGS WITH 100% STUDIO FIDELITY (ZERO SKIPPED TAGS)
 // ===================================================================
 
-async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
+function getTaggleTextInput() {
+  return document.querySelector(
+    '#secondary_tags input[type="text"].taggle_input, ' +
+    '#secondary_tags input.taggle_input[type="text"], ' +
+    '#secondary_tags .taggle_input input, ' +
+    '#secondary_tags input[type="text"], ' +
+    '#secondary_tags input:not([type="hidden"]), ' +
+    '#secondary_tags textarea'
+  );
+}
+
+async function fillSupportingTagsWithSuggestionsLive(suppTagsVal, mainTagVal = "") {
   if (!suppTagsVal) return;
   updateTracker(4, 74, "Adding Supporting Tags from Studio...");
 
@@ -920,10 +931,27 @@ async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
     secTagsContainer.classList.add("tp-field-active");
   }
 
-  // Parse studio tags (clean hashtags, trim whitespace)
-  const tags = suppTagsVal.split(",")
-    .map(t => t.trim().replace(/^#+/, ''))
+  // Parse studio tags (clean hashtags, trim whitespace, deduplicate, filter out primary tag duplicate)
+  const normalizedMainTag = (mainTagVal || "").trim().toLowerCase().replace(/^#+/, '');
+  const seen = new Set();
+  const rawTags = suppTagsVal.split(",")
+    .map(t => t.trim().replace(/^#+/, '').trim())
     .filter(Boolean);
+
+  const tags = [];
+  for (const raw of rawTags) {
+    const lower = raw.toLowerCase();
+    // TeePublic max length is 39 characters
+    const clean = raw.substring(0, 39);
+    if (!clean) continue;
+    // Disallow if duplicate of main tag (TeePublic rejects secondary tag == main tag)
+    if (normalizedMainTag && lower === normalizedMainTag) continue;
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    tags.push(clean);
+    // TeePublic allows at most 14-15 secondary tags
+    if (tags.length >= 15) break;
+  }
 
   if (tags.length === 0) return;
 
@@ -943,14 +971,14 @@ async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
     clearScript.remove();
   } catch (_) {}
 
-  await sleep(200);
+  await sleep(150);
 
   // 2. Add each studio tag one by one with live visual feedback
   let addedCount = 0;
 
   for (let idx = 0; idx < tags.length; idx++) {
     const tag = tags[idx];
-    const secInput = document.querySelector('#secondary_tags input.taggle_input, #secondary_tags input, #secondary_tags textarea');
+    const secInput = getTaggleTextInput();
 
     if (secInput) {
       secInput.focus();
@@ -960,38 +988,32 @@ async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
       for (let c = 0; c < tag.length; c++) {
         secInput.value += tag[c];
         secInput.dispatchEvent(new Event("input", { bubbles: true }));
-        if (c % 2 === 0) await sleep(15);
+        if (c % 2 === 0) await sleep(12);
       }
       secInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await sleep(40);
 
-      // Check if autocomplete shows an EXACT match for this tag
-      let exactMatchFound = false;
-      const autoItems = Array.from(document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item, .ui-menu-item-wrapper'));
-      for (const item of autoItems) {
-        const itemText = (item.textContent || "").trim().toLowerCase();
-        if (itemText === tag.toLowerCase()) {
-          exactMatchFound = true;
-          try {
-            item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, which: 1 }));
-            item.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, which: 1 }));
-            item.click();
-          } catch (_) {}
-          break;
-        }
-      }
+      // Trigger Taggle via Comma keydown/keypress/keyup
+      secInput.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
+      secInput.dispatchEvent(new KeyboardEvent("keypress", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
+      secInput.dispatchEvent(new KeyboardEvent("keyup", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
 
-      // If no exact match clicked, add directly via Taggle API + native comma/enter keypresses
-      if (!exactMatchFound) {
-        // Press Comma & Enter on the Taggle input
-        secInput.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
-        secInput.dispatchEvent(new KeyboardEvent("keypress", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
-        secInput.dispatchEvent(new KeyboardEvent("keyup", { key: ",", code: "Comma", keyCode: 188, which: 188, bubbles: true }));
+      // Check if Taggle successfully added this tag
+      let hasTag = Array.from(document.querySelectorAll('#secondary_tags input[name="design[secondary_tags][]"]'))
+        .some(inp => inp.value.toLowerCase() === tag.toLowerCase());
 
+      if (!hasTag) {
+        // Also try Enter key
         secInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
         secInput.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
         secInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      }
 
-        // Primary Injection: Invoke Taggle's official .add(tag) method in page world
+      hasTag = Array.from(document.querySelectorAll('#secondary_tags input[name="design[secondary_tags][]"]'))
+        .some(inp => inp.value.toLowerCase() === tag.toLowerCase());
+
+      // If key events did not trigger Taggle, invoke Taggle.add in page world
+      if (!hasTag) {
         try {
           const addScript = document.createElement("script");
           addScript.textContent = `
@@ -1011,6 +1033,31 @@ async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
         } catch (_) {}
       }
 
+      await sleep(80);
+
+      hasTag = Array.from(document.querySelectorAll('#secondary_tags input[name="design[secondary_tags][]"]'))
+        .some(inp => inp.value.toLowerCase() === tag.toLowerCase());
+
+      // Ultimate DOM fallback: Safely inject chip and hidden input inside ul.taggle_list right before li.taggle_input
+      if (!hasTag) {
+        const list = document.querySelector('#secondary_tags ul.taggle_list, #secondary_tags ul');
+        const inputLi = document.querySelector('#secondary_tags li.taggle_input');
+        if (list) {
+          const chipLi = document.createElement("li");
+          chipLi.className = "taggle";
+          chipLi.innerHTML = `<span class="taggle_text">${escapeHtml(tag)}</span><button type="button" class="close">&times;</button><input type="hidden" name="design[secondary_tags][]" value="${escapeHtml(tag)}">`;
+          if (inputLi) {
+            list.insertBefore(chipLi, inputLi);
+          } else {
+            list.appendChild(chipLi);
+          }
+        }
+      }
+
+      // Always clear the text input for the next tag
+      secInput.value = "";
+      secInput.dispatchEvent(new Event("input", { bubbles: true }));
+
       // Hide autocomplete menu so it doesn't obstruct the screen
       try {
         const closeAuto = document.createElement("script");
@@ -1019,33 +1066,11 @@ async function fillSupportingTagsWithSuggestionsLive(suppTagsVal) {
         closeAuto.remove();
       } catch (_) {}
 
-      await sleep(150);
-
-      // Verify DOM: Ensure hidden input <input type="hidden" name="design[secondary_tags][]" value="tag"> exists!
-      const existingHiddenInputs = Array.from(document.querySelectorAll('#secondary_tags input[name="design[secondary_tags][]"]'));
-      const alreadyHasHidden = existingHiddenInputs.some(inp => inp.value.toLowerCase() === tag.toLowerCase());
-
-      if (!alreadyHasHidden && secTagsContainer) {
-        // Fallback DOM injection: Guarantee that the hidden input exists for form submission!
-        const hiddenInp = document.createElement("input");
-        hiddenInp.type = "hidden";
-        hiddenInp.name = "design[secondary_tags][]";
-        hiddenInp.value = tag;
-        secTagsContainer.appendChild(hiddenInp);
-
-        // Visual tag chip
-        const list = secTagsContainer.querySelector("ul.taggle_list, ul") || secTagsContainer;
-        const chip = document.createElement("li");
-        chip.className = "taggle";
-        chip.innerHTML = `<span class="taggle_text">${escapeHtml(tag)}</span><a href="javascript:void(0)" class="close">&times;</a>`;
-        list.insertBefore(chip, list.firstChild);
-      }
-
       addedCount++;
       const currentPct = 74 + Math.round((addedCount / tags.length) * 8);
       updateTracker(4, Math.min(82, currentPct), `Added Tag (${addedCount}/${tags.length}): "${tag}"`);
       showToast(`✓ Tag [${addedCount}/${tags.length}]: "${tag}"`, "info", 600);
-      await sleep(200);
+      await sleep(100);
     }
   }
 
