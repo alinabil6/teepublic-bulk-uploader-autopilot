@@ -427,7 +427,7 @@ function setupClipboardPaste() {
         appendLog("INFO", "Clipboard paste: CSV listing text detected");
         const blob = new Blob([text], { type: "text/csv;charset=utf-8;" });
         const file = new File([blob], `clipboard_import_${Date.now()}.csv`, { type: "text/csv" });
-        await uploadCsvFiles([file], true);
+        await uploadCsvFiles([file], false);
       }
     }
   });
@@ -567,7 +567,7 @@ function setupViewModeSwitcher() {
 // FILE ACCESS & IMPORT BUTTONS
 // ===================================================================
 
-let isAppendMode = true;
+let isAppendMode = false;
 
 function setupImportButtons() {
   const btnCsv = document.getElementById("btnImportCSV");
@@ -577,12 +577,7 @@ function setupImportButtons() {
 
   if (btnCsv && csvInput) {
     btnCsv.addEventListener("click", () => {
-      if (state.designs.length > 0) {
-        const ok = confirm(`You currently have ${state.designs.length} listings loaded.\n\n• Click OK to APPEND new listings to your current batch.\n• Click Cancel to START FRESH (replace current batch).`);
-        isAppendMode = ok;
-      } else {
-        isAppendMode = false;
-      }
+      isAppendMode = false;
       csvInput.value = "";
       csvInput.click();
     });
@@ -681,7 +676,7 @@ function triggerSingleUpload(index) {
   }
 }
 
-async function uploadCsvFiles(files, append = isAppendMode) {
+async function uploadCsvFiles(files, append = false) {
   if (!files || files.length === 0) return;
   const actionName = append ? "Appending" : "Loading fresh batch of";
   appendLog("INFO", `${actionName} ${files.length} CSV listing file(s)...`);
@@ -751,7 +746,7 @@ async function processMixedFiles(files) {
   });
 
   if (csvFiles.length > 0) {
-    await uploadCsvFiles(csvFiles);
+    await uploadCsvFiles(csvFiles, false);
   }
 
   if (imageFiles.length > 0) {
@@ -772,9 +767,9 @@ function setupFileInputs() {
   if (csvInput) {
     csvInput.addEventListener("change", async (e) => {
       const files = Array.from(e.target.files || []);
-      if (files.length > 0) await uploadCsvFiles(files, isAppendMode);
+      if (files.length > 0) await uploadCsvFiles(files, false);
       csvInput.value = "";
-      isAppendMode = true;
+      isAppendMode = false;
     });
   }
 

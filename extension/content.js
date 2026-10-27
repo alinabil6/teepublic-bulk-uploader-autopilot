@@ -343,16 +343,28 @@ async function executeMasterWorkflow(advanceNext = true) {
 
     try {
       const serverState = await apiGetStudioState();
-      if (serverState && serverState.designs && serverState.designs.length > 0) {
-        designs = serverState.designs;
-        curIdx = serverState.current_index >= 0 ? serverState.current_index : 0;
-        totalCount = designs.length;
-        design = designs[curIdx] || null;
+      if (serverState && Array.isArray(serverState.designs)) {
+        if (serverState.designs.length > 0) {
+          designs = serverState.designs;
+          curIdx = serverState.current_index >= 0 ? serverState.current_index : 0;
+          totalCount = designs.length;
+          design = designs[curIdx] || null;
 
-        await chrome.storage.local.set({
-          cachedDesigns: designs,
-          activeDesignIndex: curIdx
-        });
+          await chrome.storage.local.set({
+            cachedDesigns: designs,
+            activeDesignIndex: curIdx
+          });
+        } else {
+          // Connected to studio, but studio queue is empty (user cleared it)!
+          // Clear extension cache so old stale designs are never resurrected!
+          await chrome.storage.local.set({
+            cachedDesigns: [],
+            activeDesignIndex: 0
+          });
+          designs = [];
+          design = null;
+          totalCount = 0;
+        }
       } else {
         throw new Error("No server state");
       }
@@ -1768,13 +1780,13 @@ async function syncWithLocalServer() {
 
   try {
     const data = await apiGetStudioState();
-    if (data && data.designs) {
+    if (data && Array.isArray(data.designs)) {
       const designs = data.designs || [];
-      const idx = data.current_index >= 0 ? data.current_index : 0;
+      const idx = designs.length > 0 ? Math.min(data.current_index || 0, designs.length - 1) : 0;
       await chrome.storage.local.set({ cachedDesigns: designs, activeDesignIndex: idx });
-      updateHUDLabels(designs[idx], idx, designs.length);
+      updateHUDLabels(designs[idx] || null, idx, designs.length);
       if (btn) btn.textContent = "✓ Synced!";
-      showToast(`✓ Synced ${designs.length} listings from studio!`, "success", 2000);
+      showToast(designs.length > 0 ? `✓ Synced ${designs.length} listings from studio!` : "ℹ️ Desktop Studio queue is currently empty.", "success", 2000);
     } else {
       if (btn) btn.textContent = "Studio Offline";
     }

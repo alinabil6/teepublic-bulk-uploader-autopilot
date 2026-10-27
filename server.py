@@ -65,6 +65,17 @@ def clean_uploads_directory():
                     except Exception:
                         pass
 
+def clean_csv_directory():
+    """Remove any previously uploaded CSV files from UPLOAD_DIR for a clean fresh slate."""
+    if os.path.exists(UPLOAD_DIR):
+        for entry in os.listdir(UPLOAD_DIR):
+            full_path = os.path.join(UPLOAD_DIR, entry)
+            if os.path.isfile(full_path) and entry.lower().endswith(".csv"):
+                try:
+                    os.remove(full_path)
+                except Exception:
+                    pass
+
 # Application in-memory state
 class AppState:
     def __init__(self):
@@ -404,9 +415,9 @@ def upload_csv():
     if append_param is not None:
         append_mode = str(append_param).lower() in ("true", "1", "yes")
     elif request.is_json:
-        append_mode = bool((request.json or {}).get("append", True))
+        append_mode = bool((request.json or {}).get("append", False))
     else:
-        append_mode = True
+        append_mode = False
 
     if request.is_json:
         paths = (request.json or {}).get("paths", [])
@@ -429,6 +440,7 @@ def upload_csv():
             if valid_paths:
                 if not append_mode:
                     state.clear_all(wipe_disk=False)
+                    clean_csv_directory()
                 for idx, p in enumerate(valid_paths):
                     load_csv_data(p, state.folder_path, source="Path Input", append=(append_mode or idx > 0))
                 return jsonify(state.to_dict())
@@ -445,6 +457,7 @@ def upload_csv():
 
     if not append_mode:
         state.clear_all(wipe_disk=False)
+        clean_csv_directory()
 
     loaded_any = False
     upload_dir_abs = os.path.abspath(UPLOAD_DIR)
