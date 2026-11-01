@@ -137,6 +137,8 @@ function clearSessionActive() {
 (async function init() {
   const store = await chrome.storage.local.get({
     extensionEnabled: true,
+    scraperEnabled: true,
+    scrapedCompetitorDesigns: [],
     activeDesignIndex: 0,
     cachedDesigns: [],
     prefColorMode: "dark",
@@ -153,6 +155,7 @@ function clearSessionActive() {
 
   // Always mount HUD with toggle
   mountHUD(store);
+  mountQuickGrabLauncher(store);
   if (isEnabled) {
     attachKeyboardShortcuts();
   }
@@ -235,6 +238,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
     return true;
   }
+
+  if (message.action === "CHECK_PRODUCT_PAGE") {
+    const isProd = isProductPage();
+    let preview = null;
+    if (isProd) {
+      const scraped = scrapeTeePublicProductPage();
+      preview = {
+        title: scraped.title,
+        store: scraped.store,
+        tagCount: scraped.tags.length
+      };
+    }
+    sendResponse({ isProduct: isProd, preview: preview });
+    return true;
+  }
+
+  if (message.action === "SCRAPE_CURRENT_PAGE") {
+    const scraped = scrapeTeePublicProductPage();
+    sendResponse({ success: true, data: scraped });
+    return true;
+  }
+
+  if (message.action === "TOGGLE_SCRAPER") {
+    const isEnabled = Boolean(message.enabled);
+    const grabBtn = document.getElementById("tp-quick-grab-launcher");
+    if (grabBtn) {
+      if (isEnabled) grabBtn.classList.remove("grab-deactivated");
+      else grabBtn.classList.add("grab-deactivated");
+    }
+    sendResponse({ success: true });
+    return true;
+  }
 });
 
 // Real-time synchronization across tabs and extension popup
@@ -253,6 +288,21 @@ chrome.storage.onChanged.addListener((changes, area) => {
       chrome.storage.local.get(["cachedDesigns", "activeDesignIndex"], (data) => {
         updateHUDLabels(data.cachedDesigns?.[data.activeDesignIndex || 0], data.activeDesignIndex || 0, data.cachedDesigns?.length || 0);
       });
+    }
+    if (changes.scrapedCompetitorDesigns !== undefined) {
+      const count = (changes.scrapedCompetitorDesigns.newValue || []).length;
+      const grabBadge = document.getElementById("tpGrabCountBadge");
+      if (grabBadge) grabBadge.textContent = count;
+      const hudBadge = document.getElementById("hudScrapedCount");
+      if (hudBadge) hudBadge.textContent = count;
+    }
+    if (changes.scraperEnabled !== undefined) {
+      const isEnabled = Boolean(changes.scraperEnabled.newValue);
+      const grabBtn = document.getElementById("tp-quick-grab-launcher");
+      if (grabBtn) {
+        if (isEnabled) grabBtn.classList.remove("grab-deactivated");
+        else grabBtn.classList.add("grab-deactivated");
+      }
     }
   }
 });
@@ -1599,6 +1649,18 @@ function mountHUD(store) {
           <span>🔄</span> Sync Data
         </button>
       </div>
+
+      <!-- Scraper Quick Bar inside HUD -->
+      <div class="hud-scraper-bar">
+        <div class="hud-scraper-info">
+          <span>🏷️ Competitor Tags:</span>
+          <span class="hud-scraper-badge" id="hudScrapedCount">${(store.scrapedCompetitorDesigns || []).length}</span>
+        </div>
+        <div class="hud-scraper-actions">
+          <button class="hud-btn-mini" id="btnHudQuickGrab" title="Grab this listing's tags & title (Alt+S)">📸 Grab</button>
+          <button class="hud-btn-mini success" id="btnHudDownloadCsv" title="Download collected listings as Magic Listing CSV">📥 CSV</button>
+        </div>
+      </div>
     </div>
 
     <div class="hud-footer">
@@ -1644,6 +1706,26 @@ function mountHUD(store) {
   });
 
   document.getElementById("btnHudSync").addEventListener("click", syncWithLocalServer);
+
+  const btnHudQuickGrab = document.getElementById("btnHudQuickGrab");
+  if (btnHudQuickGrab) {
+    btnHudQuickGrab.addEventListener("click", () => {
+      handleQuickGrabTrigger();
+    });
+  }
+
+  const btnHudDownloadCsv = document.getElementById("btnHudDownloadCsv");
+  if (btnHudDownloadCsv) {
+    btnHudDownloadCsv.addEventListener("click", async () => {
+      const data = await chrome.storage.local.get({ scrapedCompetitorDesigns: [] });
+      const designs = data.scrapedCompetitorDesigns || [];
+      if (designs.length === 0) {
+        showToast("⚠️ No designs collected yet! Open tabs and click Grab.", "warning", 2500);
+        return;
+      }
+      downloadMagicListingCsvDirect(designs);
+    });
+  }
 
   const toggleInput = document.getElementById("hudToggleInput");
   if (toggleInput) {
@@ -1738,6 +1820,8 @@ function unmountHUD() {
   if (existing) existing.remove();
   const mini = document.getElementById("tp-hud-mini-launcher");
   if (mini) mini.remove();
+  const grabber = document.getElementById("tp-quick-grab-launcher");
+  if (grabber) grabber.remove();
   const toast = document.getElementById("tp-companion-toast");
   if (toast) toast.remove();
   const modal = document.getElementById("tp-publish-notice-modal");
@@ -1830,6 +1914,10 @@ function attachKeyboardShortcuts() {
       e.preventDefault();
       handleAutoListTrigger(false);
     }
+    if (e.altKey && (e.key === "s" || e.key === "S" || e.key === "c" || e.key === "C")) {
+      e.preventDefault();
+      handleQuickGrabTrigger();
+    }
   };
   window.addEventListener("keydown", keydownListener);
 }
@@ -1905,4 +1993,344 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text || "";
   return div.innerHTML;
+}
+
+// ===================================================================
+// COMPETITOR TAG & TITLE SCRAPER ENGINE (1-CLICK BATCH COLLECTOR)
+// ===================================================================
+
+function isProductPage() {
+  const path = window.location.pathname.toLowerCase();
+  const productSlugs = [
+    "/t-shirt/", "/t-shirts/", "/hoodie/", "/hoodies/", "/tank-top/",
+    "/crewneck-sweatshirt/", "/long-sleeve-t-shirt/", "/baseball-t-shirt/",
+    "/kids-t-shirt/", "/baby-onesie/", "/sticker/", "/stickers/",
+    "/phone-case/", "/phone-cases/", "/laptop-case/", "/mug/", "/mugs/",
+    "/wall-art/", "/pillow/", "/pillows/", "/tote-bag/", "/tote-bags/",
+    "/tapestry/", "/tapestries/", "/pin/", "/pins/", "/mask/", "/masks/",
+    "/magnets/", "/magnet/", "/prints/", "/print/"
+  ];
+
+  for (const slug of productSlugs) {
+    if (path.includes(slug)) return true;
+  }
+
+  // Check characteristic DOM elements
+  if (document.querySelector('h1.product-title, h1[itemprop="name"], .product-details h1, .m-product-title')) {
+    return true;
+  }
+
+  // Check for "Artist's Applied Tags" heading
+  const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b'));
+  const hasAppliedTags = allHeaders.some(el => (el.textContent || '').toLowerCase().includes("artist's applied tags"));
+  if (hasAppliedTags) return true;
+
+  return false;
+}
+
+function cleanScrapedText(str) {
+  if (!str) return "";
+  return str.replace(/\s+/g, " ").trim();
+}
+
+function cleanScrapedTag(str) {
+  if (!str) return "";
+  return str
+    .replace(/^#+/, "")
+    .replace(/["'\\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function scrapeTeePublicProductPage() {
+  const result = {
+    id: "scraped_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6),
+    url: window.location.href,
+    title: "",
+    store: "",
+    mainTag: "",
+    tags: [],
+    price: "",
+    imageUrl: "",
+    timestamp: new Date().toISOString()
+  };
+
+  // 1. EXTRACT TITLE
+  const h1Candidates = [
+    document.querySelector('h1[itemprop="name"]'),
+    document.querySelector('h1.product-title'),
+    document.querySelector('h1.design-title'),
+    document.querySelector('h1.m-product-title'),
+    document.querySelector('.product-details h1'),
+    document.querySelector('.product-meta h1'),
+    document.querySelector('h1')
+  ];
+  for (const h1 of h1Candidates) {
+    if (h1 && cleanScrapedText(h1.textContent)) {
+      result.title = cleanScrapedText(h1.textContent);
+      break;
+    }
+  }
+
+  if (!result.title) {
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    if (ogTitle && ogTitle.content) {
+      result.title = cleanScrapedText(ogTitle.content.split("|")[0]);
+    }
+  }
+
+  if (!result.title) {
+    const docTitle = document.title || "";
+    result.title = cleanScrapedText(docTitle.split("|")[0].split("- TeePublic")[0]);
+  }
+
+  // 2. EXTRACT STORE / ARTIST NAME
+  const storeLinks = [
+    document.querySelector('a[href*="/user/"]'),
+    document.querySelector('a[href*="/stores/"]'),
+    document.querySelector('[itemprop="author"] a'),
+    document.querySelector('.designer-name a, a.designer-name'),
+    document.querySelector('.artist-name a, a.artist-name'),
+    document.querySelector('a.store-link')
+  ];
+  for (const sl of storeLinks) {
+    if (sl && cleanScrapedText(sl.textContent)) {
+      result.store = cleanScrapedText(sl.textContent);
+      break;
+    }
+  }
+
+  if (!result.store) {
+    const bodyText = document.body.innerText || "";
+    const m = bodyText.match(/(?:designed\s+and\s+sold\s+by|sold\s+by|by)\s+([A-Za-z0-9_\-\s]{2,40})/i);
+    if (m && m[1]) {
+      result.store = cleanScrapedText(m[1].split("\n")[0]);
+    }
+  }
+
+  // 3. EXTRACT ARTIST'S APPLIED TAGS
+  const extractedTags = [];
+
+  // Strategy A: Find "Artist's Applied Tags" heading
+  const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, div, p, span, strong, b'));
+  const appliedTagsHeader = allHeaders.find(el => {
+    const txt = (el.textContent || '').trim().toLowerCase();
+    return txt === "artist's applied tags" || txt === "artist applied tags" || txt.includes("artist's applied tags");
+  });
+
+  if (appliedTagsHeader) {
+    const container = appliedTagsHeader.closest('.design-tags, .applied-tags, .tags-container, section, div') || appliedTagsHeader.parentElement;
+    if (container) {
+      const pills = container.querySelectorAll('a, button, span, .tag, .pill');
+      for (const p of pills) {
+        if (p === appliedTagsHeader || p.contains(appliedTagsHeader)) continue;
+        const tagTxt = cleanScrapedTag(p.textContent);
+        if (tagTxt && tagTxt !== "artist's applied tags" && !tagTxt.includes("similar to") && tagTxt.length < 60 && !/^\d+$/.test(tagTxt)) {
+          extractedTags.push(tagTxt);
+        }
+      }
+    }
+  }
+
+  // Strategy B: Tag selector fallback
+  if (extractedTags.length === 0) {
+    const tagLinks = document.querySelectorAll(
+      '.design-tags a, .applied-tags a, .m-design-tags a, .tags-list a, .product-tags a, a[href*="/tag/"], a[href*="/t-shirts/tag/"], [data-tag]'
+    );
+    for (const tl of tagLinks) {
+      const tagTxt = cleanScrapedTag(tl.textContent || tl.getAttribute("data-tag"));
+      if (tagTxt && tagTxt.length > 1 && tagTxt.length < 60 && !/^\d+$/.test(tagTxt)) {
+        if (!["home", "t-shirts", "hoodies", "stickers", "cart", "account", "login", "browse"].includes(tagTxt)) {
+          extractedTags.push(tagTxt);
+        }
+      }
+    }
+  }
+
+  // Strategy C: JSON-LD fallback
+  if (extractedTags.length === 0) {
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const sc of scripts) {
+      try {
+        const parsed = JSON.parse(sc.textContent);
+        if (parsed.keywords) {
+          const kwList = Array.isArray(parsed.keywords) ? parsed.keywords : String(parsed.keywords).split(",");
+          for (const k of kwList) {
+            const cleanK = cleanScrapedTag(k);
+            if (cleanK) extractedTags.push(cleanK);
+          }
+        }
+        if (!result.store && parsed.brand && parsed.brand.name) {
+          result.store = cleanScrapedText(parsed.brand.name);
+        }
+      } catch (_) {}
+    }
+  }
+
+  // Strategy D: Meta keywords fallback
+  if (extractedTags.length === 0) {
+    const metaKw = document.querySelector('meta[name="keywords"]');
+    if (metaKw && metaKw.content) {
+      metaKw.content.split(",").forEach(k => {
+        const cleanK = cleanScrapedTag(k);
+        if (cleanK) extractedTags.push(cleanK);
+      });
+    }
+  }
+
+  // Deduplicate tags preserving original order
+  const uniqueTags = [];
+  const seen = new Set();
+  for (const t of extractedTags) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      uniqueTags.push(t);
+    }
+  }
+
+  result.tags = uniqueTags;
+  result.mainTag = uniqueTags.length > 0 ? uniqueTags[0] : "";
+
+  // 4. IMAGE PREVIEW
+  const imgEl = document.querySelector('.product-photos img, .product-image img, #design-image, img.product-img, [itemprop="image"]');
+  if (imgEl && imgEl.src) {
+    result.imageUrl = imgEl.src;
+  }
+
+  return result;
+}
+
+function mountQuickGrabLauncher(store) {
+  if (document.getElementById("tp-quick-grab-launcher")) return;
+  if (!isProductPage()) return;
+
+  const currentList = store.scrapedCompetitorDesigns || [];
+  const isEnabled = store.scraperEnabled !== false;
+
+  const btn = document.createElement("div");
+  btn.id = "tp-quick-grab-launcher";
+  btn.className = isEnabled ? "" : "grab-deactivated";
+  btn.title = "Click to Grab Title & Supporting Tags for Magic Listing (Alt+S)";
+  btn.innerHTML = `
+    <span class="grab-icon">📸</span>
+    <span class="grab-label">Grab Tags</span>
+    <span class="grab-badge" id="tpGrabCountBadge">${currentList.length}</span>
+  `;
+
+  document.body.appendChild(btn);
+
+  btn.addEventListener("click", () => {
+    handleQuickGrabTrigger();
+  });
+}
+
+async function handleQuickGrabTrigger() {
+  const store = await chrome.storage.local.get({
+    scraperEnabled: true,
+    scrapedCompetitorDesigns: []
+  });
+
+  if (store.scraperEnabled === false) {
+    showToast("⚠️ Tag Scraper is OFF. Turn ON in extension popup to collect.", "warning", 3000);
+    return;
+  }
+
+  const scraped = scrapeTeePublicProductPage();
+  if (!scraped.title && scraped.tags.length === 0) {
+    showToast("⚠️ Could not find listing title or tags on this page.", "warning", 2500);
+    return;
+  }
+
+  const currentList = store.scrapedCompetitorDesigns || [];
+  const existingIdx = currentList.findIndex(
+    x => (x.url && scraped.url && x.url === scraped.url) ||
+         (x.title && scraped.title && x.title.toLowerCase() === scraped.title.toLowerCase())
+  );
+
+  let updatedList = [...currentList];
+  let isUpdate = false;
+  let itemNum = updatedList.length + 1;
+
+  if (existingIdx >= 0) {
+    updatedList[existingIdx] = { ...updatedList[existingIdx], ...scraped };
+    isUpdate = true;
+    itemNum = existingIdx + 1;
+  } else {
+    updatedList.push(scraped);
+  }
+
+  await chrome.storage.local.set({ scrapedCompetitorDesigns: updatedList });
+
+  // Visual button feedback
+  const grabBtn = document.getElementById("tp-quick-grab-launcher");
+  if (grabBtn) {
+    grabBtn.classList.add("grab-success");
+    const label = grabBtn.querySelector(".grab-label");
+    const badge = grabBtn.querySelector(".grab-badge");
+    if (label) label.textContent = isUpdate ? `✓ Updated! (#${itemNum})` : `✓ Saved! (#${itemNum})`;
+    if (badge) badge.textContent = updatedList.length;
+
+    setTimeout(() => {
+      grabBtn.classList.remove("grab-success");
+      if (label) label.textContent = "Grab Tags";
+    }, 2000);
+  }
+
+  // Update in-HUD badge
+  const hudBadge = document.getElementById("hudScrapedCount");
+  if (hudBadge) hudBadge.textContent = updatedList.length;
+
+  // Show Toast
+  const storePrefix = scraped.store ? ` • ${scraped.store}` : "";
+  const toastMsg = isUpdate
+    ? `✓ Updated #${itemNum}: "${scraped.title}" (${scraped.tags.length} tags${storePrefix})`
+    : `✓ #${itemNum} Collected: "${scraped.title}" (${scraped.tags.length} tags${storePrefix}) • Total: ${updatedList.length}`;
+  showToast(toastMsg, "success", 3000);
+}
+
+function downloadMagicListingCsvDirect(designs) {
+  const headers = [
+    "Design ID", "File Name", "Platform", "Title", "Brand / Store",
+    "Category", "Bullet 1", "Bullet 2", "Tags / Keywords",
+    "Attributes", "Description", "Generated At"
+  ];
+  const lines = [headers.join(",")];
+  const dateStr = new Date().toISOString();
+
+  designs.forEach((item, idx) => {
+    const designId = (item.id || `scraped_${idx + 1}`).slice(0, 12);
+    const fileName = `design_${idx + 1}.png`;
+    const platform = "teepublic";
+    const title = item.title || `Competitor Design ${idx + 1}`;
+    const storeName = item.store || "";
+    const category = "Apparel / T-Shirts";
+    const bullet1 = "";
+    const bullet2 = "";
+    const tagsStr = (Array.isArray(item.tags) ? item.tags : []).join(", ");
+    const attributes = "";
+    const description = `${title} ${storeName ? 'by ' + storeName : ''}`.trim();
+    const generatedAt = item.timestamp || dateStr;
+
+    const escapeCell = (c) => `"${String(c || '').replace(/"/g, '""')}"`;
+    const row = [
+      escapeCell(designId), escapeCell(fileName), escapeCell(platform),
+      escapeCell(title), escapeCell(storeName), escapeCell(category),
+      escapeCell(bullet1), escapeCell(bullet2), escapeCell(tagsStr),
+      escapeCell(attributes), escapeCell(description), escapeCell(generatedAt)
+    ];
+    lines.push(row.join(","));
+  });
+
+  const csvContent = lines.join("\r\n");
+  const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `magic_listings_export_${new Date().toISOString().split("T")[0]}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  showToast(`✓ Downloaded ${designs.length} listings to CSV!`, "success", 2500);
 }

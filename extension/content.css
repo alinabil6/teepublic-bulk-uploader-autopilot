@@ -776,3 +776,162 @@
   border-color: rgba(34, 197, 94, 0.4);
 }
 
+/* =================================================================== */
+/* IN-PAGE FLOATING QUICK-GRAB LAUNCHER & HUD SCRAPER WIDGET          */
+/* =================================================================== */
+
+#tp-quick-grab-launcher {
+  position: fixed !important;
+  bottom: 22px !important;
+  right: 78px !important;
+  height: 46px !important;
+  padding: 0 16px 0 14px !important;
+  border-radius: 999px !important;
+  background: rgba(15, 23, 42, 0.94) !important;
+  backdrop-filter: blur(14px) !important;
+  -webkit-backdrop-filter: blur(14px) !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.5) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 14px rgba(56, 189, 248, 0.3) !important;
+  cursor: pointer !important;
+  z-index: 2147483646 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  color: #F8FAFC !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.2px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  user-select: none !important;
+}
+
+#tp-quick-grab-launcher:hover {
+  transform: scale(1.06) translateY(-2px) !important;
+  border-color: #38BDF8 !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.65), 0 0 22px rgba(56, 189, 248, 0.6) !important;
+  background: rgba(15, 23, 42, 0.98) !important;
+}
+
+#tp-quick-grab-launcher:active {
+  transform: scale(0.96) !important;
+}
+
+#tp-quick-grab-launcher.hidden-grabber {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: scale(0.6) translateX(20px) !important;
+  visibility: hidden !important;
+}
+
+#tp-quick-grab-launcher.grab-deactivated {
+  opacity: 0.5 !important;
+  border-color: rgba(148, 163, 184, 0.3) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+  cursor: not-allowed !important;
+}
+
+#tp-quick-grab-launcher.grab-success {
+  background: linear-gradient(135deg, #059669, #10B981) !important;
+  border-color: #34D399 !important;
+  box-shadow: 0 0 24px rgba(16, 185, 129, 0.85) !important;
+  color: #FFFFFF !important;
+}
+
+.grab-icon {
+  font-size: 16px !important;
+  line-height: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.grab-label {
+  white-space: nowrap !important;
+  font-size: 12.5px !important;
+  color: inherit !important;
+}
+
+.grab-badge {
+  background: #2563EB !important;
+  color: #FFFFFF !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  padding: 1px 7px !important;
+  border-radius: 999px !important;
+  min-width: 18px !important;
+  text-align: center !important;
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.5) !important;
+}
+
+#tp-quick-grab-launcher.grab-success .grab-badge {
+  background: #FFFFFF !important;
+  color: #059669 !important;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.6) !important;
+}
+
+/* In-HUD Scraper Quick Actions Panel */
+.hud-scraper-bar {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hud-scraper-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #94A3B8;
+}
+
+.hud-scraper-badge {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38BDF8;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.hud-scraper-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-btn-mini {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #F8FAFC;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.hud-btn-mini:hover {
+  background: #2563EB;
+  border-color: #38BDF8;
+  color: #FFFFFF;
+}
+
+.hud-btn-mini.success {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34D399;
+}
+
+.hud-btn-mini.success:hover {
+  background: #059669;
+  color: #FFFFFF;
+}
+
+
