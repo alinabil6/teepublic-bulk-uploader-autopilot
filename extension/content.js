@@ -2036,7 +2036,7 @@ function cleanScrapedText(str) {
 // ===================================================================
 // STRICT ARTIST-APPLIED TAGS EXTRACTION ENGINE
 // Strictly isolates ONLY the artist's own applied tags for this design.
-// Excludes: "Customers Also Search", "Trending Searches", "Explore", etc.
+// Zero bleeding into "Customers Also Search", "Trending", or "Related".
 // ===================================================================
 
 function cleanScrapedTag(str) {
@@ -2044,13 +2044,23 @@ function cleanScrapedTag(str) {
   return str
     .replace(/^#+/, "")
     .replace(/["'\\]/g, "")
+    .replace(/[\u2018\u2019\u201A\u201B\u2032'`´]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeHeaderProbe(str) {
+  if (!str) return "";
+  return str
+    .replace(/[\u2018\u2019\u201A\u201B\u2032'`´]/g, "'")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 }
 
 function isInvalidOrUnrelatedTag(tagText) {
-  if (!tagText || tagText.length < 2 || tagText.length > 50) return true;
+  if (!tagText || tagText.length < 2 || tagText.length > 40) return true;
 
   const stopWords = [
     "artist's applied tags", "artist applied tags", "applied tags",
@@ -2070,100 +2080,99 @@ function isInvalidOrUnrelatedTag(tagText) {
 function extractArtistAppliedTagsStrictly(doc = document) {
   const extractedTags = [];
 
-  const UNRELATED_BOUNDARY_KEYWORDS = [
-    "customer", "also search", "also looked", "also buy", "also bought",
-    "trending", "explore", "related", "more products", "more from",
-    "similar to", "similar design", "similar product", "recommended",
-    "popular", "best seller", "other designs", "reviews"
-  ];
+  // 1. Locate the exact "Artist's Applied Tags" heading element with normalized quotes
+  const allHeaders = Array.from(doc.querySelectorAll('h1, h2, h3, h4, h5, h6, div, p, span, strong, b, label'));
+  let appliedHeader = null;
 
-  function isUnrelatedBoundary(node) {
-    if (!node || node.nodeType !== 1) return false;
-    const txt = (node.textContent || '').trim().toLowerCase();
-    const tag = node.tagName.toLowerCase();
-    const isHeading = ["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "header"].includes(tag) ||
-                      (typeof node.className === "string" && (node.className.includes("header") || node.className.includes("title")));
-
-    if (isHeading) {
-      for (const kw of UNRELATED_BOUNDARY_KEYWORDS) {
-        if (txt.includes(kw) && !txt.includes("artist's applied tags") && !txt.includes("artist applied tags")) {
-          return true;
-        }
-      }
+  for (const el of allHeaders) {
+    const rawTxt = el.textContent || '';
+    if (rawTxt.length > 60) continue; // Must be a concise header/label, not a big block
+    const norm = normalizeHeaderProbe(rawTxt);
+    if (norm === "artist's applied tags" || norm === "artist applied tags" ||
+        norm.startsWith("artist's applied tags") || norm.startsWith("artist applied tags")) {
+      appliedHeader = el;
+      break;
     }
-    return false;
   }
 
-  // 1. Locate the exact "Artist's Applied Tags" heading element
-  const allHeaders = Array.from(doc.querySelectorAll('h1, h2, h3, h4, h5, h6, div, p, span, strong, b, label'));
-  const appliedHeader = allHeaders.find(el => {
-    if (el.children.length > 2) return false;
-    const txt = (el.textContent || '').trim().toLowerCase();
-    return txt === "artist's applied tags" || txt === "artist applied tags" ||
-           txt.startsWith("artist's applied tags") || txt.startsWith("artist applied tags");
-  });
-
-  if (appliedHeader) {
-    // Strategy A: Check immediate next sibling container
-    let sibling = appliedHeader.nextElementSibling;
-    let foundSiblingTags = false;
-
-    while (sibling) {
-      if (isUnrelatedBoundary(sibling)) break;
-
-      const pills = sibling.querySelectorAll('a, button, span, .tag, .pill, [data-tag]');
-      if (pills.length > 0) {
-        for (const p of pills) {
-          if (p.classList?.contains("disabled") || p.classList?.contains("inactive") || p.getAttribute("aria-disabled") === "true") {
-            continue;
-          }
-          const t = cleanScrapedTag(p.textContent || p.getAttribute("data-tag"));
-          if (!isInvalidOrUnrelatedTag(t)) {
-            extractedTags.push(t);
-            foundSiblingTags = true;
-          }
-        }
-      } else {
-        const t = cleanScrapedTag(sibling.textContent);
-        if (!isInvalidOrUnrelatedTag(t)) {
-          extractedTags.push(t);
-          foundSiblingTags = true;
+  // Fallback if slightly embedded in text
+  if (!appliedHeader) {
+    for (const el of allHeaders) {
+      const rawTxt = el.textContent || '';
+      if (rawTxt.length > 70) continue;
+      const norm = normalizeHeaderProbe(rawTxt);
+      if (norm.includes("artist's applied tags") || norm.includes("artist applied tags")) {
+        if (el.children.length <= 2) {
+          appliedHeader = el;
+          break;
         }
       }
+    }
+  }
 
-      sibling = sibling.nextElementSibling;
-      if (foundSiblingTags && sibling && isUnrelatedBoundary(sibling)) {
-        break;
+  // 2. Identify the SINGLE direct tags container following the header
+  let tagsContainer = null;
+
+  if (appliedHeader) {
+    // Check immediate next element sibling
+    const nextSib = appliedHeader.nextElementSibling;
+    if (nextSib) {
+      const pills = nextSib.querySelectorAll('a, button, [data-tag], .tag, .pill');
+      if (pills.length > 0) {
+        tagsContainer = nextSib;
       }
     }
 
-    // Strategy B: If no tags in next siblings, inspect immediate parent's children appearing AFTER header
-    if (extractedTags.length === 0 && appliedHeader.parentElement) {
-      const parent = appliedHeader.parentElement;
-      let passedHeader = false;
+    // Check parent's next element sibling (if header was wrapped in <div class="header"><h3>...</h3></div>)
+    if (!tagsContainer && appliedHeader.parentElement && appliedHeader.parentElement.nextElementSibling) {
+      const parentSib = appliedHeader.parentElement.nextElementSibling;
+      const pills = parentSib.querySelectorAll('a, button, [data-tag], .tag, .pill');
+      if (pills.length > 0) {
+        tagsContainer = parentSib;
+      }
+    }
 
-      for (const child of parent.children) {
+    // Check sibling within parent that appears AFTER header
+    if (!tagsContainer && appliedHeader.parentElement) {
+      let passedHeader = false;
+      for (const child of appliedHeader.parentElement.children) {
         if (child === appliedHeader || child.contains(appliedHeader)) {
           passedHeader = true;
           continue;
         }
         if (!passedHeader) continue;
-        if (isUnrelatedBoundary(child)) break; // Stop at customer/trending boundaries!
-
-        const pills = child.querySelectorAll('a, button, span, .tag, .pill');
+        const pills = child.querySelectorAll('a, button, [data-tag], .tag, .pill');
         if (pills.length > 0) {
-          for (const p of pills) {
-            const t = cleanScrapedTag(p.textContent);
-            if (!isInvalidOrUnrelatedTag(t)) {
-              extractedTags.push(t);
-            }
-          }
-        } else {
-          const t = cleanScrapedTag(child.textContent);
-          if (!isInvalidOrUnrelatedTag(t)) {
-            extractedTags.push(t);
-          }
+          tagsContainer = child;
+          break;
         }
+      }
+    }
+  }
+
+  // Direct CSS fallback if DOM hierarchy varies
+  if (!tagsContainer) {
+    tagsContainer = doc.querySelector('.m-design-tags__list, [data-test="artist-applied-tags"], .artist-tags-list, .applied-tags-list');
+  }
+
+  // 3. Extract pills ONLY from this single container
+  if (tagsContainer) {
+    const pills = tagsContainer.querySelectorAll('a, button, [data-tag], .tag, .pill, li');
+    for (const p of pills) {
+      // Exclude muted / inactive / disabled elements (e.g., greyed out variant chips like Image 2 "christmas puns 1")
+      if (p.classList?.contains("disabled") ||
+          p.classList?.contains("inactive") ||
+          p.classList?.contains("muted") ||
+          p.classList?.contains("text-muted") ||
+          p.classList?.contains("is-muted") ||
+          p.getAttribute("aria-disabled") === "true") {
+        continue;
+      }
+
+      const raw = p.getAttribute("data-tag") || p.textContent;
+      const clean = cleanScrapedTag(raw);
+      if (!isInvalidOrUnrelatedTag(clean)) {
+        extractedTags.push(clean);
       }
     }
   }
@@ -2180,7 +2189,7 @@ function extractArtistAppliedTagsStrictly(doc = document) {
   }
 
   // Filter out numbered suffix variants
-  const finalTags = uniqueTags.filter(tag => {
+  const filteredTags = uniqueTags.filter(tag => {
     const numMatch = tag.match(/^(.+?)\s+(\d+)$/);
     if (numMatch) {
       const basePhrase = numMatch[1].trim();
@@ -2191,7 +2200,8 @@ function extractArtistAppliedTagsStrictly(doc = document) {
     return true;
   });
 
-  return finalTags;
+  // TeePublic Platform Constraint: Max 15 tags per listing
+  return filteredTags.slice(0, 15);
 }
 
 function scrapeTeePublicProductPage() {
@@ -2300,7 +2310,6 @@ function mountQuickGrabLauncher(store) {
 async function handleQuickGrabTrigger() {
   const store = await chrome.storage.local.get({
     scraperEnabled: true,
-    storeDesignLimit: 30,
     scrapedCompetitorDesigns: []
   });
 
@@ -2315,36 +2324,13 @@ async function handleQuickGrabTrigger() {
     return;
   }
 
-  const maxPerStore = store.storeDesignLimit || 30;
   const currentList = store.scrapedCompetitorDesigns || [];
   const storeName = (scraped.store || "Independent Store").trim();
-
-  // Check store limit (20 or 30 for each store)
-  const existingForStore = currentList.filter(item =>
-    (item.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
-  );
 
   const existingIdx = currentList.findIndex(
     x => (x.url && scraped.url && x.url === scraped.url) ||
          (x.title && scraped.title && x.title.toLowerCase() === scraped.title.toLowerCase())
   );
-
-  // If new design and this store has reached its limit: block and notify!
-  if (existingIdx === -1 && existingForStore.length >= maxPerStore) {
-    showToast(`⚠️ Store Limit Reached (${existingForStore.length}/${maxPerStore}) for "${storeName}". Max ${maxPerStore} designs per store.`, "warning", 3500);
-
-    const grabBtn = document.getElementById("tp-quick-grab-launcher");
-    if (grabBtn) {
-      grabBtn.classList.add("grab-limit-reached");
-      const label = grabBtn.querySelector(".grab-label");
-      if (label) label.textContent = `Limit (${maxPerStore}/${maxPerStore})`;
-      setTimeout(() => {
-        grabBtn.classList.remove("grab-limit-reached");
-        if (label) label.textContent = "Grab Tags";
-      }, 2500);
-    }
-    return;
-  }
 
   let updatedList = [...currentList];
   let isUpdate = false;
@@ -2370,7 +2356,7 @@ async function handleQuickGrabTrigger() {
     grabBtn.classList.add("grab-success");
     const label = grabBtn.querySelector(".grab-label");
     const badge = grabBtn.querySelector(".grab-badge");
-    if (label) label.textContent = isUpdate ? `✓ Updated! (${currentStoreTotal}/${maxPerStore})` : `✓ Saved! (${currentStoreTotal}/${maxPerStore})`;
+    if (label) label.textContent = isUpdate ? `✓ Updated! (${updatedList.length})` : `✓ Saved! (${updatedList.length})`;
     if (badge) badge.textContent = updatedList.length;
 
     setTimeout(() => {
@@ -2383,8 +2369,8 @@ async function handleQuickGrabTrigger() {
   const hudBadge = document.getElementById("hudScrapedCount");
   if (hudBadge) hudBadge.textContent = updatedList.length;
 
-  // Show Toast with Store Quota
-  const storeBadge = storeName ? ` • ${storeName} [${currentStoreTotal}/${maxPerStore}]` : "";
+  // Show Toast
+  const storeBadge = storeName ? ` • ${storeName} (${currentStoreTotal} designs)` : "";
   const toastMsg = isUpdate
     ? `✓ Updated #${itemNum}: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge})`
     : `✓ #${itemNum} Collected: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge}) • Total: ${updatedList.length}`;

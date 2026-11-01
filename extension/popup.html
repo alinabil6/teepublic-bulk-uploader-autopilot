@@ -165,7 +165,7 @@
       <div class="scraper-control-card">
         <div class="scraper-control-info">
           <span class="scraper-control-title">Competitor Tag Collector</span>
-          <span class="scraper-control-sub">Collect 20–30 competitor tabs in 1 click</span>
+          <span class="scraper-control-sub">Collect unlimited competitor tabs in 1 click (100+ designs)</span>
         </div>
         <div class="header-toggle-container" title="Activate or Deactivate Tag Scraper">
           <span class="status-toggle-text active" id="scraperStatusText">ON</span>
@@ -176,21 +176,14 @@
         </div>
       </div>
 
-      <!-- Store Limit Settings & Quotas Bar -->
-      <div class="scraper-limit-card">
-        <div class="limit-setting-row">
-          <label class="limit-label" for="selStoreLimit">
-            <span class="limit-title">Store Limit:</span>
-            <span class="limit-hint">Max designs per store</span>
-          </label>
-          <select id="selStoreLimit" class="limit-select" title="Limit collected designs to 20 or 30 for each store">
-            <option value="20">Max 20 / Store</option>
-            <option value="25">Max 25 / Store</option>
-            <option value="30" selected>Max 30 / Store</option>
-          </select>
+      <!-- Stores in Collection (Unlimited Batching) -->
+      <div class="scraper-stores-card">
+        <div class="scraper-stores-header">
+          <span class="scraper-stores-title">Stores in Collection:</span>
+          <span class="scraper-stores-badge" id="statStoresCountBadge">Unlimited Batch</span>
         </div>
         <div class="store-quotas-list" id="storeQuotasList" style="display: none;">
-          <!-- Dynamically populated per-store badge counters: e.g. "Little Quotes: 12/30" -->
+          <!-- Dynamically populated per-store badge counters: e.g. "🏪 Little Quotes: 12 designs" -->
         </div>
       </div>
 
@@ -203,9 +196,6 @@
         <div class="target-card-preview" id="targetPreviewBox" style="display: none;">
           <span class="target-preview-title" id="targetPreviewTitle">—</span>
           <span class="target-preview-store" id="targetPreviewStore">—</span>
-        </div>
-        <div class="target-store-limit-alert" id="targetStoreLimitAlert" style="display: none;">
-          <span>⚠️</span> <span id="targetStoreLimitMsg">Store limit reached (30/30)</span>
         </div>
         <button class="btn btn-primary btn-scrape-active" id="btnScrapeActiveTab" title="Extract title and supporting tags from this tab and add to your collection">
           <span class="btn-icon">📸</span>

@@ -58,10 +58,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const statUniqueTagsTotal = document.getElementById("statUniqueTagsTotal");
   const statArtistStoresTotal = document.getElementById("statArtistStoresTotal");
 
-  const selStoreLimit = document.getElementById("selStoreLimit");
   const storeQuotasList = document.getElementById("storeQuotasList");
-  const targetStoreLimitAlert = document.getElementById("targetStoreLimitAlert");
-  const targetStoreLimitMsg = document.getElementById("targetStoreLimitMsg");
 
   const btnDownloadMagicCsv = document.getElementById("btnDownloadMagicCsv");
   const btnDownloadTwoRowCsv = document.getElementById("btnDownloadTwoRowCsv");
@@ -211,8 +208,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      const storeData = await chrome.storage.local.get({ scrapedCompetitorDesigns: [], storeDesignLimit: 30 });
-      const currentLimit = storeData.storeDesignLimit || 30;
+      const storeData = await chrome.storage.local.get({ scrapedCompetitorDesigns: [] });
       const currentDesigns = storeData.scrapedCompetitorDesigns || [];
 
       // Check with content script on active tab
@@ -221,7 +217,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           const preview = resp.preview || {};
           const storeName = (preview.store || "Independent Store").trim();
           const storeCount = currentDesigns.filter(x => (x.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()).length;
-          setTargetState(true, "🟢 TeePublic Design Page Detected", preview, storeCount, currentLimit);
+          setTargetState(true, "🟢 TeePublic Design Page Detected", preview, storeCount);
         } else {
           // If not confirmed product page, check URL slug
           const urlLower = tab.url.toLowerCase();
@@ -234,7 +230,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             setTargetState(true, "🟢 TeePublic Design Detected", {
               title: tab.title ? tab.title.split("|")[0].trim() : "TeePublic Listing",
               store: ""
-            }, 0, currentLimit);
+            }, 0);
           } else {
             setTargetState(false, "Navigate to any TeePublic design/t-shirt page");
           }
@@ -245,40 +241,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  function setTargetState(isTarget, statusMsg, preview = null, storeCount = 0, storeLimit = 30) {
+  function setTargetState(isTarget, statusMsg, preview = null, storeCount = 0) {
     if (targetStatusLabel) targetStatusLabel.textContent = statusMsg;
     if (targetDot) {
       targetDot.className = "target-dot " + (isTarget ? "connected" : "inactive");
     }
-    const isAtLimit = Boolean(preview && preview.store && storeCount >= storeLimit);
 
     if (preview && preview.title && isTarget) {
       if (targetPreviewBox) targetPreviewBox.style.display = "flex";
       if (targetPreviewTitle) targetPreviewTitle.textContent = preview.title;
-      if (targetPreviewStore) targetPreviewStore.textContent = preview.store ? `Store: ${preview.store} (${storeCount}/${storeLimit})` : "TeePublic Listing";
+      if (targetPreviewStore) targetPreviewStore.textContent = preview.store ? `Store: ${preview.store} (${storeCount} designs collected)` : "TeePublic Listing";
     } else {
       if (targetPreviewBox) targetPreviewBox.style.display = "none";
     }
 
-    if (targetStoreLimitAlert) {
-      if (isAtLimit) {
-        targetStoreLimitAlert.style.display = "flex";
-        if (targetStoreLimitMsg) targetStoreLimitMsg.textContent = `Store "${preview.store}" reached limit (${storeCount}/${storeLimit})`;
-      } else {
-        targetStoreLimitAlert.style.display = "none";
-      }
-    }
-
     if (btnScrapeActiveTab) {
-      if (isAtLimit) {
-        btnScrapeActiveTab.disabled = true;
-        btnScrapeActiveTab.classList.add("limit-blocked");
-        btnScrapeActiveTab.innerHTML = `<span class="btn-icon">⚠️</span> STORE LIMIT REACHED (${storeLimit}/${storeLimit})`;
-      } else {
-        btnScrapeActiveTab.disabled = false;
-        btnScrapeActiveTab.classList.remove("limit-blocked");
-        btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
-      }
+      btnScrapeActiveTab.disabled = false;
+      btnScrapeActiveTab.classList.remove("limit-blocked");
+      btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
     }
   }
 
@@ -287,7 +267,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     btnScrapeActiveTab.addEventListener("click", async () => {
       const store = await chrome.storage.local.get({
         scraperEnabled: true,
-        storeDesignLimit: 30,
         scrapedCompetitorDesigns: []
       });
       if (store.scraperEnabled === false) {
@@ -309,27 +288,13 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (!chrome.runtime.lastError && resp && resp.success && resp.data) {
             const item = resp.data;
             const currentList = store.scrapedCompetitorDesigns || [];
-            const maxPerStore = store.storeDesignLimit || 30;
             const storeName = (item.store || "Independent Store").trim();
-
-            const existingForStore = currentList.filter(x =>
-              (x.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
-            );
 
             // Check if already captured in this batch (by URL or title)
             const existingIdx = currentList.findIndex(x =>
               (x.url && item.url && x.url === item.url) ||
               (x.title && item.title && x.title.toLowerCase() === item.title.toLowerCase())
             );
-
-            // If new design and this store has reached its limit: block and notify!
-            if (existingIdx === -1 && existingForStore.length >= maxPerStore) {
-              alert(`⚠️ Store Limit Reached (${existingForStore.length}/${maxPerStore}) for "${storeName}". Cannot add more than ${maxPerStore} designs for this store.`);
-              btnScrapeActiveTab.disabled = true;
-              btnScrapeActiveTab.classList.add("limit-blocked");
-              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">⚠️</span> STORE LIMIT REACHED (${maxPerStore}/${maxPerStore})`;
-              return;
-            }
 
             let updatedList = [...currentList];
             if (existingIdx >= 0) {
@@ -340,6 +305,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             await chrome.storage.local.set({ scrapedCompetitorDesigns: updatedList });
 
+            const currentStoreCount = updatedList.filter(x =>
+              (x.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
+            ).length;
+
             // Visual feedback
             btnScrapeActiveTab.classList.add("grabbed-flash");
             btnScrapeActiveTab.innerHTML = `<span class="btn-icon">✓</span> Saved #${updatedList.length}! (${item.tags.length} artist tags)`;
@@ -348,6 +317,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             setTimeout(() => {
               btnScrapeActiveTab.classList.remove("grabbed-flash");
+              btnScrapeActiveTab.disabled = false;
+              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
+            }, 1800);
+          } else {
+            // Fallback: retry
+            btnScrapeActiveTab.innerHTML = `<span class="btn-icon">⚠️</span> Retrying scrape...`;
+            setTimeout(() => {
+              btnScrapeActiveTab.disabled = false;
+              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
+            }, 1500);
+          }
+        });
+      } catch (err) {
+        console.warn("Scraper message error:", err);
+        btnScrapeActiveTab.disabled = false;
+        btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
+      }
+    });
+  }
               btnScrapeActiveTab.disabled = false;
               btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
             }, 1800);
@@ -373,8 +361,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   // ===================================================================
   async function renderScrapedDesignsList(list) {
     const designs = Array.isArray(list) ? list : [];
-    const storeData = await chrome.storage.local.get({ storeDesignLimit: 30 });
-    const currentLimit = storeData.storeDesignLimit || 30;
 
     // Update badges & stats
     if (scraperBadge) scraperBadge.textContent = designs.length;
@@ -395,14 +381,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (statUniqueTagsTotal) statUniqueTagsTotal.textContent = allTags.size;
     if (statArtistStoresTotal) statArtistStoresTotal.textContent = Object.keys(storeCountMap).length;
 
-    // Render Store Quota Chips in storeQuotasList
+    // Render Store Badge Counters in storeQuotasList (Unlimited batching)
     if (storeQuotasList) {
       const storeEntries = Object.entries(storeCountMap);
       if (storeEntries.length > 0) {
         storeQuotasList.style.display = "flex";
         storeQuotasList.innerHTML = storeEntries.map(([sName, count]) => {
-          const isFull = count >= currentLimit;
-          return `<span class="store-quota-chip ${isFull ? 'full' : 'active'}" title="${escapeHtml(sName)}">🏪 ${escapeHtml(sName)}: ${count}/${currentLimit}${isFull ? ' (FULL)' : ''}</span>`;
+          return `<span class="store-quota-chip" title="${escapeHtml(sName)}">🏪 ${escapeHtml(sName)}: ${count} design${count === 1 ? '' : 's'}</span>`;
         }).join("");
       } else {
         storeQuotasList.style.display = "none";
@@ -493,11 +478,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       header.appendChild(actionsGroup);
       card.appendChild(header);
 
-      // Card Meta Row with Store Quota
+      // Card Meta Row with Store Designs Count
       const metaRow = document.createElement("div");
       metaRow.className = "scraped-card-meta";
       metaRow.innerHTML = `
-        <span class="scraped-meta-store">🏪 <strong>${escapeHtml(store)}</strong> (${storeCount}/${currentLimit})</span>
+        <span class="scraped-meta-store">🏪 <strong>${escapeHtml(store)}</strong> (${storeCount} design${storeCount === 1 ? '' : 's'})</span>
         <span class="scraped-meta-count">${tags.length} artist tags</span>
       `;
       card.appendChild(metaRow);
@@ -716,7 +701,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   const data = await chrome.storage.local.get({
     extensionEnabled: true,
     scraperEnabled: true,
-    storeDesignLimit: 30,
     activePopupTab: "autopilot",
     activeDesignIndex: 0,
     prefColorMode: "dark",
@@ -726,17 +710,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     cachedDesigns: [],
     scrapedCompetitorDesigns: []
   });
-
-  if (selStoreLimit) {
-    selStoreLimit.value = String(data.storeDesignLimit || 30);
-    selStoreLimit.addEventListener("change", async (e) => {
-      const newLimit = parseInt(e.target.value, 10) || 30;
-      await chrome.storage.local.set({ storeDesignLimit: newLimit });
-      const storeRes = await chrome.storage.local.get({ scrapedCompetitorDesigns: [] });
-      renderScrapedDesignsList(storeRes.scrapedCompetitorDesigns || []);
-      checkActiveTabForScraper();
-    });
-  }
 
   updateAutopilotToggleUI(data.extensionEnabled);
   updateScraperToggleUI(data.scraperEnabled !== false);
@@ -767,13 +740,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       if (changes.scrapedCompetitorDesigns !== undefined) {
         renderScrapedDesignsList(changes.scrapedCompetitorDesigns.newValue || []);
-      }
-      if (changes.storeDesignLimit !== undefined) {
-        if (selStoreLimit) selStoreLimit.value = String(changes.storeDesignLimit.newValue || 30);
-        chrome.storage.local.get(["scrapedCompetitorDesigns"], res => {
-          renderScrapedDesignsList(res.scrapedCompetitorDesigns || []);
-          checkActiveTabForScraper();
-        });
       }
       if (changes.cachedDesigns !== undefined || changes.activeDesignIndex !== undefined) {
         chrome.storage.local.get(["cachedDesigns", "activeDesignIndex"], res => {
