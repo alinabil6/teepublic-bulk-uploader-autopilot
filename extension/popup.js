@@ -336,25 +336,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   }
-              btnScrapeActiveTab.disabled = false;
-              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
-            }, 1800);
-          } else {
-            // Fallback: try injecting scraper directly
-            btnScrapeActiveTab.innerHTML = `<span class="btn-icon">⚠️</span> Retrying scrape...`;
-            setTimeout(() => {
-              btnScrapeActiveTab.disabled = false;
-              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
-            }, 1500);
-          }
-        });
-      } catch (err) {
-        console.warn("Scraper message error:", err);
-        btnScrapeActiveTab.disabled = false;
-        btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
-      }
-    });
-  }
 
   // ===================================================================
   // 5. RENDER COLLECTED DESIGNS LIST & STATS

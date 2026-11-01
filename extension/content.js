@@ -1896,14 +1896,54 @@ function showToast(message, type = "info", duration = 3000) {
   }
 
   const icon = type === "success" ? "✓" : type === "warning" ? "⚠️" : "⚡";
-  toast.className = `toast-${type}`;
-  toast.innerHTML = `<span class="toast-icon">${icon}</span><span class="toast-msg">${escapeHtml(message)}</span>`;
+  const iconColor = type === "success" ? "#34D399" : type === "warning" ? "#FBBF24" : "#38BDF8";
+  const borderColor = type === "success" ? "rgba(52, 211, 153, 0.7)" : type === "warning" ? "rgba(245, 158, 11, 0.7)" : "rgba(56, 189, 248, 0.7)";
+  const glowColor = type === "success" ? "rgba(52, 211, 153, 0.35)" : type === "warning" ? "rgba(245, 158, 11, 0.35)" : "rgba(56, 189, 248, 0.35)";
 
-  requestAnimationFrame(() => toast.classList.add("visible"));
+  toast.className = `toast-${type}`;
+
+  // Direct inline styles guarantee dark mode text is bright white and completely immune to site style overrides
+  toast.style.cssText = `
+    position: fixed !important;
+    top: 24px !important;
+    left: 50% !important;
+    transform: translateX(-50%) translateY(0) !important;
+    z-index: 2147483647 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    padding: 12px 24px !important;
+    border-radius: 999px !important;
+    background: #0B0F19 !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    border: 1.5px solid ${borderColor} !important;
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.85), 0 0 25px ${glowColor} !important;
+    color: #FFFFFF !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+    transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1), transform 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  `;
+
+  toast.innerHTML = `
+    <span class="toast-icon" style="font-size: 16px !important; font-weight: 700 !important; color: ${iconColor} !important; display: inline-flex !important; align-items: center !important; line-height: 1 !important;">${icon}</span>
+    <span class="toast-msg" style="color: #FFFFFF !important; font-size: 13.5px !important; font-weight: 600 !important; letter-spacing: 0.15px !important; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85) !important; display: inline-block !important;">${escapeHtml(message)}</span>
+  `;
+
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+    toast.style.setProperty("opacity", "1", "important");
+    toast.style.setProperty("transform", "translateX(-50%) translateY(0)", "important");
+  });
 
   if (window._toastTimeout) clearTimeout(window._toastTimeout);
   window._toastTimeout = setTimeout(() => {
     toast.classList.remove("visible");
+    toast.style.setProperty("opacity", "0", "important");
+    toast.style.setProperty("transform", "translateX(-50%) translateY(-20px)", "important");
   }, duration);
 }
 
