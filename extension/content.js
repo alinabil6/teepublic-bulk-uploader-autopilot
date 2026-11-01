@@ -2419,12 +2419,10 @@ async function handleQuickGrabTrigger() {
 
 function downloadMagicListingCsvDirect(designs) {
   const headers = [
-    "Design ID", "File Name", "Platform", "Title", "Brand / Store",
-    "Category", "Bullet 1", "Bullet 2", "Tags / Keywords",
-    "Attributes", "Description", "Generated At"
+    "Design ID", "File Name", "Platform", "Title",
+    "Tags / Keywords", "Description"
   ];
   const lines = [headers.join(",")];
-  const dateStr = new Date().toISOString();
 
   designs.forEach((item, idx) => {
     const designId = (item.id || `scraped_${idx + 1}`).slice(0, 12);
@@ -2432,20 +2430,17 @@ function downloadMagicListingCsvDirect(designs) {
     const platform = "teepublic";
     const title = item.title || `Competitor Design ${idx + 1}`;
     const storeName = item.store || "";
-    const category = "Apparel / T-Shirts";
-    const bullet1 = "";
-    const bullet2 = "";
     const tagsStr = (Array.isArray(item.tags) ? item.tags : []).join(", ");
-    const attributes = "";
     const description = `${title} ${storeName ? 'by ' + storeName : ''}`.trim();
-    const generatedAt = item.timestamp || dateStr;
 
     const escapeCell = (c) => `"${String(c || '').replace(/"/g, '""')}"`;
     const row = [
-      escapeCell(designId), escapeCell(fileName), escapeCell(platform),
-      escapeCell(title), escapeCell(storeName), escapeCell(category),
-      escapeCell(bullet1), escapeCell(bullet2), escapeCell(tagsStr),
-      escapeCell(attributes), escapeCell(description), escapeCell(generatedAt)
+      escapeCell(designId),
+      escapeCell(fileName),
+      escapeCell(platform),
+      escapeCell(title),
+      escapeCell(tagsStr),
+      escapeCell(description)
     ];
     lines.push(row.join(","));
   });

@@ -519,18 +519,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       "File Name",
       "Platform",
       "Title",
-      "Brand / Store",
-      "Category",
-      "Bullet 1",
-      "Bullet 2",
       "Tags / Keywords",
-      "Attributes",
-      "Description",
-      "Generated At"
+      "Description"
     ];
 
     const lines = [headers.join(",")];
-    const dateStr = new Date().toISOString();
 
     designs.forEach((item, idx) => {
       const designId = (item.id || `scraped_${idx + 1}`).slice(0, 12);
@@ -538,27 +531,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       const platform = "teepublic";
       const title = item.title || `Competitor Design ${idx + 1}`;
       const storeName = item.store || "";
-      const category = "Apparel / T-Shirts";
-      const bullet1 = "";
-      const bullet2 = "";
       const tagsStr = (Array.isArray(item.tags) ? item.tags : []).join(", ");
-      const attributes = "";
       const description = `${title} ${storeName ? 'by ' + storeName : ''}`.trim();
-      const generatedAt = item.timestamp || dateStr;
 
       const row = [
         escapeCsvCell(designId),
         escapeCsvCell(fileName),
         escapeCsvCell(platform),
         escapeCsvCell(title),
-        escapeCsvCell(storeName),
-        escapeCsvCell(category),
-        escapeCsvCell(bullet1),
-        escapeCsvCell(bullet2),
         escapeCsvCell(tagsStr),
-        escapeCsvCell(attributes),
-        escapeCsvCell(description),
-        escapeCsvCell(generatedAt)
+        escapeCsvCell(description)
       ];
       lines.push(row.join(","));
     });
