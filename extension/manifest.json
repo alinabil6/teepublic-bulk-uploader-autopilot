@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Magic Fabrica - TeePublic Autopilot",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Magic Fabrica Autopilot for TeePublic Bulk Uploader & Competitor Tag Scraper. 1-Click autonomous listings and listing tag collector.",
   "icons": {
     "16": "icons/icon16.png",

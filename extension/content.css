@@ -839,6 +839,13 @@
   color: #FFFFFF !important;
 }
 
+#tp-quick-grab-launcher.grab-limit-reached {
+  background: linear-gradient(135deg, #DC2626, #EF4444) !important;
+  border-color: #F87171 !important;
+  box-shadow: 0 0 24px rgba(239, 68, 68, 0.85) !important;
+  color: #FFFFFF !important;
+}
+
 .grab-icon {
   font-size: 16px !important;
   line-height: 1 !important;

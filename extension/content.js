@@ -2033,6 +2033,12 @@ function cleanScrapedText(str) {
   return str.replace(/\s+/g, " ").trim();
 }
 
+// ===================================================================
+// STRICT ARTIST-APPLIED TAGS EXTRACTION ENGINE
+// Strictly isolates ONLY the artist's own applied tags for this design.
+// Excludes: "Customers Also Search", "Trending Searches", "Explore", etc.
+// ===================================================================
+
 function cleanScrapedTag(str) {
   if (!str) return "";
   return str
@@ -2041,6 +2047,151 @@ function cleanScrapedTag(str) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function isInvalidOrUnrelatedTag(tagText) {
+  if (!tagText || tagText.length < 2 || tagText.length > 50) return true;
+
+  const stopWords = [
+    "artist's applied tags", "artist applied tags", "applied tags",
+    "similar to", "customers also search", "customers also searched",
+    "trending", "explore", "related searches", "more products",
+    "more from this artist", "similar products", "tags", "t-shirts",
+    "hoodies", "stickers", "cart", "account", "login", "browse",
+    "home", "next", "previous"
+  ];
+
+  if (stopWords.includes(tagText)) return true;
+  if (/^\d+$/.test(tagText)) return true;
+
+  return false;
+}
+
+function extractArtistAppliedTagsStrictly(doc = document) {
+  const extractedTags = [];
+
+  const UNRELATED_BOUNDARY_KEYWORDS = [
+    "customer", "also search", "also looked", "also buy", "also bought",
+    "trending", "explore", "related", "more products", "more from",
+    "similar to", "similar design", "similar product", "recommended",
+    "popular", "best seller", "other designs", "reviews"
+  ];
+
+  function isUnrelatedBoundary(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const txt = (node.textContent || '').trim().toLowerCase();
+    const tag = node.tagName.toLowerCase();
+    const isHeading = ["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "header"].includes(tag) ||
+                      (typeof node.className === "string" && (node.className.includes("header") || node.className.includes("title")));
+
+    if (isHeading) {
+      for (const kw of UNRELATED_BOUNDARY_KEYWORDS) {
+        if (txt.includes(kw) && !txt.includes("artist's applied tags") && !txt.includes("artist applied tags")) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // 1. Locate the exact "Artist's Applied Tags" heading element
+  const allHeaders = Array.from(doc.querySelectorAll('h1, h2, h3, h4, h5, h6, div, p, span, strong, b, label'));
+  const appliedHeader = allHeaders.find(el => {
+    if (el.children.length > 2) return false;
+    const txt = (el.textContent || '').trim().toLowerCase();
+    return txt === "artist's applied tags" || txt === "artist applied tags" ||
+           txt.startsWith("artist's applied tags") || txt.startsWith("artist applied tags");
+  });
+
+  if (appliedHeader) {
+    // Strategy A: Check immediate next sibling container
+    let sibling = appliedHeader.nextElementSibling;
+    let foundSiblingTags = false;
+
+    while (sibling) {
+      if (isUnrelatedBoundary(sibling)) break;
+
+      const pills = sibling.querySelectorAll('a, button, span, .tag, .pill, [data-tag]');
+      if (pills.length > 0) {
+        for (const p of pills) {
+          if (p.classList?.contains("disabled") || p.classList?.contains("inactive") || p.getAttribute("aria-disabled") === "true") {
+            continue;
+          }
+          const t = cleanScrapedTag(p.textContent || p.getAttribute("data-tag"));
+          if (!isInvalidOrUnrelatedTag(t)) {
+            extractedTags.push(t);
+            foundSiblingTags = true;
+          }
+        }
+      } else {
+        const t = cleanScrapedTag(sibling.textContent);
+        if (!isInvalidOrUnrelatedTag(t)) {
+          extractedTags.push(t);
+          foundSiblingTags = true;
+        }
+      }
+
+      sibling = sibling.nextElementSibling;
+      if (foundSiblingTags && sibling && isUnrelatedBoundary(sibling)) {
+        break;
+      }
+    }
+
+    // Strategy B: If no tags in next siblings, inspect immediate parent's children appearing AFTER header
+    if (extractedTags.length === 0 && appliedHeader.parentElement) {
+      const parent = appliedHeader.parentElement;
+      let passedHeader = false;
+
+      for (const child of parent.children) {
+        if (child === appliedHeader || child.contains(appliedHeader)) {
+          passedHeader = true;
+          continue;
+        }
+        if (!passedHeader) continue;
+        if (isUnrelatedBoundary(child)) break; // Stop at customer/trending boundaries!
+
+        const pills = child.querySelectorAll('a, button, span, .tag, .pill');
+        if (pills.length > 0) {
+          for (const p of pills) {
+            const t = cleanScrapedTag(p.textContent);
+            if (!isInvalidOrUnrelatedTag(t)) {
+              extractedTags.push(t);
+            }
+          }
+        } else {
+          const t = cleanScrapedTag(child.textContent);
+          if (!isInvalidOrUnrelatedTag(t)) {
+            extractedTags.push(t);
+          }
+        }
+      }
+    }
+  }
+
+  // Deduplicate and filter out variants like "christmas puns 1" if "christmas puns" exists
+  const uniqueTags = [];
+  const seen = new Set();
+
+  for (const t of extractedTags) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      uniqueTags.push(t);
+    }
+  }
+
+  // Filter out numbered suffix variants
+  const finalTags = uniqueTags.filter(tag => {
+    const numMatch = tag.match(/^(.+?)\s+(\d+)$/);
+    if (numMatch) {
+      const basePhrase = numMatch[1].trim();
+      if (seen.has(basePhrase)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  return finalTags;
 }
 
 function scrapeTeePublicProductPage() {
@@ -2109,88 +2260,9 @@ function scrapeTeePublicProductPage() {
     }
   }
 
-  // 3. EXTRACT ARTIST'S APPLIED TAGS
-  const extractedTags = [];
-
-  // Strategy A: Find "Artist's Applied Tags" heading
-  const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, div, p, span, strong, b'));
-  const appliedTagsHeader = allHeaders.find(el => {
-    const txt = (el.textContent || '').trim().toLowerCase();
-    return txt === "artist's applied tags" || txt === "artist applied tags" || txt.includes("artist's applied tags");
-  });
-
-  if (appliedTagsHeader) {
-    const container = appliedTagsHeader.closest('.design-tags, .applied-tags, .tags-container, section, div') || appliedTagsHeader.parentElement;
-    if (container) {
-      const pills = container.querySelectorAll('a, button, span, .tag, .pill');
-      for (const p of pills) {
-        if (p === appliedTagsHeader || p.contains(appliedTagsHeader)) continue;
-        const tagTxt = cleanScrapedTag(p.textContent);
-        if (tagTxt && tagTxt !== "artist's applied tags" && !tagTxt.includes("similar to") && tagTxt.length < 60 && !/^\d+$/.test(tagTxt)) {
-          extractedTags.push(tagTxt);
-        }
-      }
-    }
-  }
-
-  // Strategy B: Tag selector fallback
-  if (extractedTags.length === 0) {
-    const tagLinks = document.querySelectorAll(
-      '.design-tags a, .applied-tags a, .m-design-tags a, .tags-list a, .product-tags a, a[href*="/tag/"], a[href*="/t-shirts/tag/"], [data-tag]'
-    );
-    for (const tl of tagLinks) {
-      const tagTxt = cleanScrapedTag(tl.textContent || tl.getAttribute("data-tag"));
-      if (tagTxt && tagTxt.length > 1 && tagTxt.length < 60 && !/^\d+$/.test(tagTxt)) {
-        if (!["home", "t-shirts", "hoodies", "stickers", "cart", "account", "login", "browse"].includes(tagTxt)) {
-          extractedTags.push(tagTxt);
-        }
-      }
-    }
-  }
-
-  // Strategy C: JSON-LD fallback
-  if (extractedTags.length === 0) {
-    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-    for (const sc of scripts) {
-      try {
-        const parsed = JSON.parse(sc.textContent);
-        if (parsed.keywords) {
-          const kwList = Array.isArray(parsed.keywords) ? parsed.keywords : String(parsed.keywords).split(",");
-          for (const k of kwList) {
-            const cleanK = cleanScrapedTag(k);
-            if (cleanK) extractedTags.push(cleanK);
-          }
-        }
-        if (!result.store && parsed.brand && parsed.brand.name) {
-          result.store = cleanScrapedText(parsed.brand.name);
-        }
-      } catch (_) {}
-    }
-  }
-
-  // Strategy D: Meta keywords fallback
-  if (extractedTags.length === 0) {
-    const metaKw = document.querySelector('meta[name="keywords"]');
-    if (metaKw && metaKw.content) {
-      metaKw.content.split(",").forEach(k => {
-        const cleanK = cleanScrapedTag(k);
-        if (cleanK) extractedTags.push(cleanK);
-      });
-    }
-  }
-
-  // Deduplicate tags preserving original order
-  const uniqueTags = [];
-  const seen = new Set();
-  for (const t of extractedTags) {
-    if (!seen.has(t)) {
-      seen.add(t);
-      uniqueTags.push(t);
-    }
-  }
-
-  result.tags = uniqueTags;
-  result.mainTag = uniqueTags.length > 0 ? uniqueTags[0] : "";
+  // 3. EXTRACT STRICT ARTIST-APPLIED TAGS (EXCLUDES CUSTOMER SEARCHES & TRENDING)
+  result.tags = extractArtistAppliedTagsStrictly(document);
+  result.mainTag = result.tags.length > 0 ? result.tags[0] : "";
 
   // 4. IMAGE PREVIEW
   const imgEl = document.querySelector('.product-photos img, .product-image img, #design-image, img.product-img, [itemprop="image"]');
@@ -2228,6 +2300,7 @@ function mountQuickGrabLauncher(store) {
 async function handleQuickGrabTrigger() {
   const store = await chrome.storage.local.get({
     scraperEnabled: true,
+    storeDesignLimit: 30,
     scrapedCompetitorDesigns: []
   });
 
@@ -2242,11 +2315,36 @@ async function handleQuickGrabTrigger() {
     return;
   }
 
+  const maxPerStore = store.storeDesignLimit || 30;
   const currentList = store.scrapedCompetitorDesigns || [];
+  const storeName = (scraped.store || "Independent Store").trim();
+
+  // Check store limit (20 or 30 for each store)
+  const existingForStore = currentList.filter(item =>
+    (item.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
+  );
+
   const existingIdx = currentList.findIndex(
     x => (x.url && scraped.url && x.url === scraped.url) ||
          (x.title && scraped.title && x.title.toLowerCase() === scraped.title.toLowerCase())
   );
+
+  // If new design and this store has reached its limit: block and notify!
+  if (existingIdx === -1 && existingForStore.length >= maxPerStore) {
+    showToast(`⚠️ Store Limit Reached (${existingForStore.length}/${maxPerStore}) for "${storeName}". Max ${maxPerStore} designs per store.`, "warning", 3500);
+
+    const grabBtn = document.getElementById("tp-quick-grab-launcher");
+    if (grabBtn) {
+      grabBtn.classList.add("grab-limit-reached");
+      const label = grabBtn.querySelector(".grab-label");
+      if (label) label.textContent = `Limit (${maxPerStore}/${maxPerStore})`;
+      setTimeout(() => {
+        grabBtn.classList.remove("grab-limit-reached");
+        if (label) label.textContent = "Grab Tags";
+      }, 2500);
+    }
+    return;
+  }
 
   let updatedList = [...currentList];
   let isUpdate = false;
@@ -2262,13 +2360,17 @@ async function handleQuickGrabTrigger() {
 
   await chrome.storage.local.set({ scrapedCompetitorDesigns: updatedList });
 
+  const currentStoreTotal = updatedList.filter(item =>
+    (item.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
+  ).length;
+
   // Visual button feedback
   const grabBtn = document.getElementById("tp-quick-grab-launcher");
   if (grabBtn) {
     grabBtn.classList.add("grab-success");
     const label = grabBtn.querySelector(".grab-label");
     const badge = grabBtn.querySelector(".grab-badge");
-    if (label) label.textContent = isUpdate ? `✓ Updated! (#${itemNum})` : `✓ Saved! (#${itemNum})`;
+    if (label) label.textContent = isUpdate ? `✓ Updated! (${currentStoreTotal}/${maxPerStore})` : `✓ Saved! (${currentStoreTotal}/${maxPerStore})`;
     if (badge) badge.textContent = updatedList.length;
 
     setTimeout(() => {
@@ -2281,11 +2383,11 @@ async function handleQuickGrabTrigger() {
   const hudBadge = document.getElementById("hudScrapedCount");
   if (hudBadge) hudBadge.textContent = updatedList.length;
 
-  // Show Toast
-  const storePrefix = scraped.store ? ` • ${scraped.store}` : "";
+  // Show Toast with Store Quota
+  const storeBadge = storeName ? ` • ${storeName} [${currentStoreTotal}/${maxPerStore}]` : "";
   const toastMsg = isUpdate
-    ? `✓ Updated #${itemNum}: "${scraped.title}" (${scraped.tags.length} tags${storePrefix})`
-    : `✓ #${itemNum} Collected: "${scraped.title}" (${scraped.tags.length} tags${storePrefix}) • Total: ${updatedList.length}`;
+    ? `✓ Updated #${itemNum}: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge})`
+    : `✓ #${itemNum} Collected: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge}) • Total: ${updatedList.length}`;
   showToast(toastMsg, "success", 3000);
 }
 

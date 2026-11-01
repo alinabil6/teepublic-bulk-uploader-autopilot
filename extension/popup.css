@@ -1104,3 +1104,117 @@ input:checked + .slider:before {
   color: #38BDF8;
 }
 
+/* =================================================================== */
+/* STORE LIMIT & QUOTA STYLES (20-30 PER STORE)                        */
+/* =================================================================== */
+
+.scraper-limit-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.limit-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.limit-label {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.limit-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.limit-hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.limit-select {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: #38BDF8;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.limit-select:hover,
+.limit-select:focus {
+  border-color: #38BDF8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+}
+
+.store-quotas-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.store-quota-chip {
+  font-size: 10px;
+  font-weight: 600;
+  color: #94A3B8;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 2px 7px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.store-quota-chip.active {
+  color: #34D399;
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.store-quota-chip.full {
+  color: #F87171;
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(239, 68, 68, 0.15);
+  font-weight: 700;
+}
+
+.target-store-limit-alert {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #F87171;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-scrape-active.limit-blocked {
+  background: #334155 !important;
+  border-color: #475569 !important;
+  color: #94A3B8 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+}
+
+

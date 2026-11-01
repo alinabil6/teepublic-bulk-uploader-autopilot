@@ -176,6 +176,24 @@
         </div>
       </div>
 
+      <!-- Store Limit Settings & Quotas Bar -->
+      <div class="scraper-limit-card">
+        <div class="limit-setting-row">
+          <label class="limit-label" for="selStoreLimit">
+            <span class="limit-title">Store Limit:</span>
+            <span class="limit-hint">Max designs per store</span>
+          </label>
+          <select id="selStoreLimit" class="limit-select" title="Limit collected designs to 20 or 30 for each store">
+            <option value="20">Max 20 / Store</option>
+            <option value="25">Max 25 / Store</option>
+            <option value="30" selected>Max 30 / Store</option>
+          </select>
+        </div>
+        <div class="store-quotas-list" id="storeQuotasList" style="display: none;">
+          <!-- Dynamically populated per-store badge counters: e.g. "Little Quotes: 12/30" -->
+        </div>
+      </div>
+
       <!-- Active Tab Target / 1-Click Grab Card -->
       <div class="scraper-target-card" id="scraperTargetCard">
         <div class="target-card-status">
@@ -185,6 +203,9 @@
         <div class="target-card-preview" id="targetPreviewBox" style="display: none;">
           <span class="target-preview-title" id="targetPreviewTitle">—</span>
           <span class="target-preview-store" id="targetPreviewStore">—</span>
+        </div>
+        <div class="target-store-limit-alert" id="targetStoreLimitAlert" style="display: none;">
+          <span>⚠️</span> <span id="targetStoreLimitMsg">Store limit reached (30/30)</span>
         </div>
         <button class="btn btn-primary btn-scrape-active" id="btnScrapeActiveTab" title="Extract title and supporting tags from this tab and add to your collection">
           <span class="btn-icon">📸</span>
