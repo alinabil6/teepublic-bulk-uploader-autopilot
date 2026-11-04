@@ -228,10 +228,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function getScrapedList(callback) {
     chrome.storage.local.get(["scrapedListings", "scrapedCompetitorDesigns"], (res) => {
-      const list = Array.isArray(res.scrapedListings)
-        ? res.scrapedListings
-        : (Array.isArray(res.scrapedCompetitorDesigns) ? res.scrapedCompetitorDesigns : []);
-      callback(list);
+      const arr1 = Array.isArray(res.scrapedListings) ? res.scrapedListings : [];
+      const arr2 = Array.isArray(res.scrapedCompetitorDesigns) ? res.scrapedCompetitorDesigns : [];
+
+      const combined = [];
+      const seen = new Set();
+
+      for (const item of [...arr1, ...arr2]) {
+        if (!item) continue;
+        const key = (item.url || item.title || "").trim().toLowerCase();
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          combined.push(item);
+        } else if (!key) {
+          combined.push(item);
+        }
+      }
+      callback(combined);
     });
   }
 
@@ -292,12 +305,118 @@ document.addEventListener("DOMContentLoaded", () => {
     return `"${String(val).replace(/"/g, '""')}"`;
   }
 
+  function showButtonFeedback(btn, text, isSuccess = true, duration = 2500) {
+    if (!btn) return;
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = `<span>${isSuccess ? "✓" : "⚠️"}</span> ${text}`;
+    if (isSuccess) {
+      btn.classList.add("btn-download-success");
+    }
+    setTimeout(() => {
+      btn.innerHTML = origHtml;
+      btn.classList.remove("btn-download-success");
+    }, duration);
+  }
+
+  function triggerUniversalDownload(csvString, filename, btnElement) {
+    // Prepend UTF-8 BOM so Excel opens it with perfect unicode encoding
+    const bom = "\uFEFF";
+    const fullContent = bom + csvString;
+    let success = false;
+
+    // STRATEGY 1: Universal DOM Anchor + Blob URL (Works directly in Firefox, Tor, Chrome, Brave, Edge)
+    try {
+      const blob = new Blob([fullContent], { type: "text/csv;charset=utf-8;" });
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.style.display = "none";
+      link.setAttribute("href", blobUrl);
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+
+      // Keep blob URL alive for 45s so Firefox never cancels the download mid-write
+      setTimeout(() => {
+        try {
+          if (link.parentNode) link.parentNode.removeChild(link);
+          URL.revokeObjectURL(blobUrl);
+        } catch (_) {}
+      }, 45000);
+      success = true;
+    } catch (err1) {
+      console.warn("[Magic Fabrica] Anchor blob download error:", err1);
+    }
+
+    // STRATEGY 2: DOM Anchor + Data URI (Fallback if blob URLs are restricted in Tor)
+    if (!success) {
+      try {
+        const dataUri = "data:text/csv;charset=utf-8," + encodeURIComponent(fullContent);
+        const link = document.createElement("a");
+        link.style.display = "none";
+        link.setAttribute("href", dataUri);
+        link.setAttribute("download", filename);
+        document.body.appendChild(link);
+        link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        setTimeout(() => {
+          try { if (link.parentNode) link.parentNode.removeChild(link); } catch (_) {}
+        }, 5000);
+        success = true;
+      } catch (err2) {
+        console.warn("[Magic Fabrica] Anchor data URI download error:", err2);
+      }
+    }
+
+    // STRATEGY 3: Browser Extension Downloads API (Chrome / Brave fallback with Data URI)
+    if (!success) {
+      try {
+        const dl = (typeof chrome !== "undefined" && chrome.downloads)
+          ? chrome.downloads
+          : ((typeof browser !== "undefined" && browser.downloads) ? browser.downloads : null);
+        if (dl && typeof dl.download === "function") {
+          const dataUri = "data:text/csv;charset=utf-8," + encodeURIComponent(fullContent);
+          dl.download({
+            url: dataUri,
+            filename: filename,
+            saveAs: true
+          }, () => {
+            if (chrome.runtime?.lastError) {
+              console.warn("[Magic Fabrica] dl error:", chrome.runtime.lastError);
+            }
+          });
+          success = true;
+        }
+      } catch (err3) {
+        console.warn("[Magic Fabrica] Extension downloads API error:", err3);
+      }
+    }
+
+    // STRATEGY 4: Quaternary Fallback: Copy to clipboard if OS/browser sandboxing blocks file downloads
+    if (!success) {
+      try {
+        navigator.clipboard.writeText(csvString).then(() => {
+          if (btnElement) showButtonFeedback(btnElement, "Copied CSV to Clipboard!", true, 3000);
+        });
+        return;
+      } catch (err4) {
+        console.error("[Magic Fabrica] All download strategies failed:", err4);
+      }
+    }
+
+    if (btnElement) {
+      showButtonFeedback(btnElement, "Downloaded!", true, 2500);
+    }
+  }
+
   // 1. Exact 6-column format requested for Magic Listing & Studio upload:
   // Design ID, File Name, Platform, Title, Tags / Keywords, Description
   if (btnDownloadMagicCsv) {
     btnDownloadMagicCsv.addEventListener("click", () => {
       getScrapedList((list) => {
-        if (!list.length) return;
+        if (!list.length) {
+          showButtonFeedback(btnDownloadMagicCsv, "No designs to export", false, 2500);
+          return;
+        }
         const headers = ["Design ID", "File Name", "Platform", "Title", "Tags / Keywords", "Description"];
         const rows = [headers];
 
@@ -315,12 +434,8 @@ document.addEventListener("DOMContentLoaded", () => {
           .map((r) => r.map(escapeCsvCell).join(","))
           .join("\r\n");
 
-        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        chrome.downloads.download({
-          url,
-          filename: `magic_listing_export_${new Date().toISOString().slice(0, 10)}.csv`
-        });
+        const filename = `magic_listing_export_${new Date().toISOString().slice(0, 10)}.csv`;
+        triggerUniversalDownload(csvContent, filename, btnDownloadMagicCsv);
       });
     });
   }
@@ -330,7 +445,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnDownloadTwoRowCsv) {
     btnDownloadTwoRowCsv.addEventListener("click", () => {
       getScrapedList((list) => {
-        if (!list.length) return;
+        if (!list.length) {
+          showButtonFeedback(btnDownloadTwoRowCsv, "No designs to export", false, 2500);
+          return;
+        }
         const lines = [];
 
         list.forEach((item) => {
@@ -340,12 +458,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         const csvContent = lines.join("\r\n");
-        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        chrome.downloads.download({
-          url,
-          filename: `teepublic_raw_titles_tags_${new Date().toISOString().slice(0, 10)}.csv`
-        });
+        const filename = `teepublic_raw_titles_tags_${new Date().toISOString().slice(0, 10)}.csv`;
+        triggerUniversalDownload(csvContent, filename, btnDownloadTwoRowCsv);
       });
     });
   }
@@ -359,8 +473,14 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCopyAllTags) {
     btnCopyAllTags.addEventListener("click", () => {
       getScrapedList((list) => {
+        if (!list.length) {
+          showButtonFeedback(btnCopyAllTags, "No tags", false, 2000);
+          return;
+        }
         const all = Array.from(new Set(list.flatMap((x) => x.allTags || []))).join(", ");
-        navigator.clipboard.writeText(all);
+        navigator.clipboard.writeText(all).then(() => {
+          showButtonFeedback(btnCopyAllTags, "Copied!", true, 2000);
+        });
       });
     });
   }
@@ -368,7 +488,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCopyAllTitles) {
     btnCopyAllTitles.addEventListener("click", () => {
       getScrapedList((list) => {
-        navigator.clipboard.writeText(list.map((x) => x.title).join("\n"));
+        if (!list.length) {
+          showButtonFeedback(btnCopyAllTitles, "No titles", false, 2000);
+          return;
+        }
+        navigator.clipboard.writeText(list.map((x) => x.title).join("\n")).then(() => {
+          showButtonFeedback(btnCopyAllTitles, "Copied!", true, 2000);
+        });
       });
     });
   }
