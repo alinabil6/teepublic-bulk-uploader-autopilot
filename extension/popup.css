@@ -858,15 +858,6 @@ input:checked + .slider:before {
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35) !important;
 }
 
-.btn-download-success {
-  background: linear-gradient(135deg, #059669, #10B981) !important;
-  color: #FFFFFF !important;
-  border-color: #34D399 !important;
-  box-shadow: 0 0 16px rgba(52, 211, 153, 0.6) !important;
-  transform: scale(1.02);
-  transition: all 0.2s ease !important;
-}
-
 .btn-success:hover {
   background: linear-gradient(135deg, #047857, #059669) !important;
   box-shadow: 0 6px 18px rgba(16, 185, 129, 0.5) !important;

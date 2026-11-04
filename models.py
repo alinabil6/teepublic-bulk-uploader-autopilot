@@ -31,8 +31,6 @@ class DesignItem:
     description: str = ""
     file_path: Optional[str] = None
     is_matched: bool = False
-    is_published: bool = False
-    has_thumbnail: bool = False
     status: str = "Pending Validation"
     validation_warning: Optional[str] = None
     raw_data: Dict[str, Any] = field(default_factory=dict)
@@ -40,12 +38,9 @@ class DesignItem:
     def __post_init__(self):
         if not self.original_filename and self.file_name:
             self.original_filename = self.file_name
-        self.has_thumbnail = bool(self.file_path)
 
     @property
     def status_label(self) -> str:
-        if self.is_published:
-            return "✓ Published"
         return "✓ Matched" if self.is_matched else "✗ Missing"
 
 
@@ -54,7 +49,6 @@ class ValidationSummary:
     total_csv_rows: int = 0
     matched_count: int = 0
     missing_count: int = 0
-    published_count: int = 0
     folder_png_count: int = 0
     folder_path: str = ""
     csv_path: str = ""

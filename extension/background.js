@@ -1,157 +1,160 @@
 /**
- * Magic Fabrica — TeePublic Autopilot Background Service Worker (MV3)
- * Coordinates state between Local Studio (127.0.0.1:5050), Popup, and TeePublic Content Script.
+ * TeePublic Bulk Uploader Companion — Background Service Worker (Manifest V3)
+ * Universal compatibility: Tor Browser, Firefox, Chrome, Brave, Edge
  */
 
-const STUDIO_URLS = ["http://127.0.0.1:5050", "http://localhost:5050"];
-
-async function fetchStudio(endpoint, options = {}) {
-  for (const base of STUDIO_URLS) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`${base}${endpoint}`, {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          ...(options.headers || {})
-        }
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (_) {
-      // Try fallback localhost URL
-    }
+chrome.runtime.onInstalled.addListener(async () => {
+  console.log("[TeePublic Companion] Background Service Worker installed.");
+  const existing = await chrome.storage.local.get(["extensionEnabled", "scraperEnabled", "scrapedCompetitorDesigns"]);
+  const updates = {};
+  if (existing.extensionEnabled === undefined) {
+    updates.extensionEnabled = true;
+    updates.activeDesignIndex = 0;
+    updates.prefColorMode = "dark";
+    updates.prefPrintLocation = "front";
+    updates.prefMature = "no";
+    updates.prefDefaultColor = "Black";
+    updates.cachedDesigns = [];
   }
-  return null;
-}
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(
-    ["extensionEnabled", "scraperEnabled", "autopilotState", "scrapedListings", "scrapedCompetitorDesigns", "theme"],
-    (res) => {
-      const defaults = {};
-      if (typeof res.extensionEnabled === "undefined") defaults.extensionEnabled = true;
-      if (typeof res.scraperEnabled === "undefined") defaults.scraperEnabled = true;
-      if (typeof res.theme === "undefined") defaults.theme = "dark";
-      if (!res.scrapedListings && !res.scrapedCompetitorDesigns) defaults.scrapedListings = [];
-      if (!res.autopilotState) {
-        defaults.autopilotState = {
-          isRunning: false,
-          batchCompleted: false,
-          step: 0,
-          pct: 0,
-          currentDesign: 0,
-          totalDesigns: 0,
-          statusLine: "Ready to start",
-          sessionId: null
-        };
-      }
-      if (Object.keys(defaults).length > 0) {
-        chrome.storage.local.set(defaults);
-      }
-    }
-  );
+  if (existing.scraperEnabled === undefined) {
+    updates.scraperEnabled = true;
+  }
+  if (existing.scrapedCompetitorDesigns === undefined) {
+    updates.scrapedCompetitorDesigns = [];
+  }
+  if (Object.keys(updates).length > 0) {
+    await chrome.storage.local.set(updates);
+  }
+  updateBadge(true);
 });
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || !msg.action) return false;
-
-  // 1. Master Kill-Switch Toggle (Immediate Halt)
-  if (msg.action === "SET_EXTENSION_ENABLED") {
-    const enabled = Boolean(msg.enabled);
-    chrome.storage.local.get(["autopilotState"], (data) => {
-      const nextState = {
-        ...(data.autopilotState || {}),
-        isRunning: enabled ? (data.autopilotState?.isRunning || false) : false,
-        statusLine: enabled ? "Ready to start" : "Autopilot Deactivated (OFF)"
-      };
-      chrome.storage.local.set({ extensionEnabled: enabled, autopilotState: nextState }, () => {
-        fetchStudio("/api/autopilot/toggle", {
-          method: "POST",
-          body: JSON.stringify({ enabled })
-        });
-        // Broadcast immediate stop to all TeePublic tabs
-        chrome.tabs.query({ url: ["*://*.teepublic.com/*", "*://teepublic.com/*"] }, (tabs) => {
-          tabs.forEach((t) => {
-            chrome.tabs.sendMessage(t.id, {
-              action: enabled ? "EXTENSION_ACTIVATED" : "HARD_ABORT_AUTOPILOT"
-            }).catch(() => {});
-          });
-        });
-        sendResponse({ success: true, enabled });
-      });
-    });
-    return true;
+// Update Action Badge based on activation state
+function updateBadge(enabled) {
+  if (enabled) {
+    chrome.action.setBadgeText({ text: "ON" });
+    chrome.action.setBadgeBackgroundColor({ color: "#10B981" });
+  } else {
+    chrome.action.setBadgeText({ text: "" });
   }
+}
 
-  // 2. Progress Sync from Content Script -> Storage + Studio Server
-  if (msg.action === "UPDATE_AUTOPILOT_PROGRESS") {
-    const payload = msg.payload || {};
-    chrome.storage.local.get(["autopilotState"], (data) => {
-      const updated = {
-        ...(data.autopilotState || {}),
-        ...payload,
-        updatedAt: Date.now()
-      };
-      chrome.storage.local.set({ autopilotState: updated }, () => {
-        fetchStudio("/api/autopilot/progress", {
-          method: "POST",
-          body: JSON.stringify({
-            current: updated.currentDesign || 0,
-            total: updated.totalDesigns || 0,
-            step: updated.step || 0,
-            pct: updated.pct || 0,
-            stage: updated.batchCompleted ? "completed" : (updated.isRunning ? "running" : "idle"),
-            running: Boolean(updated.isRunning),
-            message: updated.statusLine || ""
-          })
-        });
-        sendResponse({ success: true, state: updated });
-      });
-    });
-    return true;
+// Memory-safe, chunked ArrayBuffer to Base64 encoder (handles 50MB+ images without call stack overflow)
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  const chunkSize = 16384;
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+    binary += String.fromCharCode.apply(null, chunk);
   }
+  return btoa(binary);
+}
 
-  // 3. Fetch Studio State Proxy (Avoids Mixed-Content / CORS issues on HTTPS TeePublic)
-  if (msg.action === "FETCH_STUDIO_STATE") {
-    fetchStudio("/api/state").then((data) => {
-      sendResponse({ success: Boolean(data), data });
-    });
-    return true;
-  }
-
-  // 4. Fetch Artwork Binary as Base64 DataURL for reliable multi-file injection
-  if (msg.action === "FETCH_ARTWORK_BASE64") {
-    const idx = msg.index;
-    (async () => {
-      for (const base of STUDIO_URLS) {
-        try {
-          const res = await fetch(`${base}/api/thumbnail/${idx}?base=0&t=${Date.now()}`);
-          if (res.ok) {
-            const blob = await res.blob();
-            const reader = new FileReader();
-            const dataUrl = await new Promise((resolve, reject) => {
-              reader.onloadend = () => resolve(reader.result);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-            sendResponse({
-              success: true,
-              dataUrl,
-              mimeType: blob.type || "image/png"
-            });
-            return;
-          }
-        } catch (_) {}
+// Listen for messages from popup or content scripts
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "TOGGLE_EXTENSION") {
+    updateBadge(message.enabled);
+    // Broadcast to all TeePublic tabs
+    chrome.tabs.query({ url: "*://*.teepublic.com/*" }, (tabs) => {
+      for (const tab of tabs) {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+        }
       }
-      sendResponse({ success: false, error: `Failed to fetch artwork #${idx}` });
-    })();
+    });
+    sendResponse({ success: true, enabled: message.enabled });
     return true;
   }
 
-  return false;
+  if (message.action === "TOGGLE_SCRAPER") {
+    chrome.tabs.query({ url: "*://*.teepublic.com/*" }, (tabs) => {
+      for (const tab of tabs) {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+        }
+      }
+    });
+    sendResponse({ success: true, enabled: message.enabled });
+    return true;
+  }
+
+  if (message.action === "GET_EXTENSION_STATUS") {
+    chrome.storage.local.get("extensionEnabled", (res) => {
+      sendResponse({ enabled: res.extensionEnabled !== false });
+    });
+    return true;
+  }
+
+  if (message.action === "START_AUTO_LISTING") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
+      }
+    });
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // ===================================================================
+  // PRIVILEGED LOCAL API PROXY (Bypasses Tor/Firefox Mixed-Content Blocks)
+  // ===================================================================
+
+  if (message.action === "FETCH_LOCAL_STATE") {
+    (async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        const res = await fetch("http://127.0.0.1:5050/api/state", {
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          sendResponse({ success: false, error: `HTTP ${res.status}` });
+          return;
+        }
+
+        const state = await res.json();
+        sendResponse({ success: true, state: state });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message || "Failed to reach local server" });
+      }
+    })();
+    return true; // Keep message channel open for async response
+  }
+
+  if (message.action === "FETCH_LOCAL_THUMBNAIL") {
+    (async () => {
+      try {
+        const idx = message.index !== undefined ? message.index : 0;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const res = await fetch(`http://127.0.0.1:5050/api/thumbnail/${idx}`, {
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          sendResponse({ success: false, error: `HTTP ${res.status}` });
+          return;
+        }
+
+        const mimeType = res.headers.get("content-type") || "image/png";
+        const buffer = await res.arrayBuffer();
+        const base64 = arrayBufferToBase64(buffer);
+
+        sendResponse({
+          success: true,
+          base64: base64,
+          mimeType: mimeType
+        });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message || "Failed to fetch thumbnail" });
+      }
+    })();
+    return true; // Keep message channel open for async response
+  }
 });
