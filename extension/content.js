@@ -148,6 +148,7 @@ function clearSessionActive() {
     pendingAutoList: false,
     triggeredByPopupTimestamp: 0,
     advanceNextAfterFill: false,
+    batchCompleted: false,
     trackerState: null
   });
 
@@ -158,6 +159,24 @@ function clearSessionActive() {
   mountQuickGrabLauncher(store);
   if (isEnabled) {
     attachKeyboardShortcuts();
+  }
+
+  const isBatchCompleted = Boolean(store.batchCompleted || sessionStorage.getItem("TP_BATCH_COMPLETED") === "true");
+
+  // If a previous upload batch finished completely: disarm session, stop any loops, stay on page!
+  if (isBatchCompleted) {
+    clearSessionActive();
+    sessionStorage.removeItem("TP_BATCH_COMPLETED");
+    await chrome.storage.local.set({
+      pendingAutoList: false,
+      advanceNextAfterFill: false,
+      batchCompleted: false,
+      triggeredByPopupTimestamp: 0
+    });
+    isListingInProgress = false;
+    showToast("🎉 Batch Completed! All designs uploaded and published.", "success", 4000);
+    updateHUDStatus("active", "● READY");
+    return;
   }
 
   const pageType = getPageType();
@@ -174,31 +193,44 @@ function clearSessionActive() {
   const isSessionFresh = (isSessionActive || sessionTime > 0) && (Date.now() - sessionTime < 600000);
   const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 25000));
 
-  const shouldAutoContinue = isEnabled && (store.pendingAutoList || isSessionActive) && (isSessionFresh || isRecentPopupNav);
+  const shouldAutoContinue = isEnabled && !isBatchCompleted && (store.pendingAutoList || isSessionActive) && (isSessionFresh || isRecentPopupNav);
 
   if (shouldAutoContinue) {
-    // Keep active session tokens alive in this tab across design page transitions & reloads
-    markSessionActive();
-    await chrome.storage.local.set({
-      pendingAutoList: true,
-      triggeredByPopupTimestamp: 0,
-      advanceNextAfterFill: true
-    });
-
     if (pageType === "BULK_DROPZONE") {
+      markSessionActive();
+      await chrome.storage.local.set({
+        pendingAutoList: true,
+        triggeredByPopupTimestamp: 0,
+        advanceNextAfterFill: true
+      });
       showToast("🚀 TeePublic Autopilot Live! Processing bulk batch...", "info", 2000);
       setTimeout(() => {
         executeMasterWorkflow(true);
       }, 400);
     } else if (pageType === "DESIGN_EDIT") {
+      markSessionActive();
+      await chrome.storage.local.set({
+        pendingAutoList: true,
+        triggeredByPopupTimestamp: 0,
+        advanceNextAfterFill: true
+      });
       showToast("🚀 Continuing Autopilot to next design...", "info", 2000);
       setTimeout(() => {
         executeMasterWorkflow(true);
       }, 400);
     } else {
-      setTimeout(() => {
-        window.location.href = "https://www.teepublic.com/designs/bulk_uploader";
-      }, 400);
+      // Storefront, profile, or other non-uploader page:
+      // ONLY navigate to bulk uploader if strictly initiated by a fresh popup click!
+      if (isRecentPopupNav && store.pendingAutoList) {
+        showToast("📍 Navigating to TeePublic Bulk Uploader...", "info", 1500);
+        setTimeout(() => {
+          window.location.href = "https://www.teepublic.com/designs/bulk_uploader";
+        }, 400);
+      } else {
+        // Otherwise, batch is done or manual visit: disarm and stay on page (NO ZOMBIE LOOP!)
+        clearSessionActive();
+        await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
+      }
     }
   } else {
     // Direct window open, fresh manual visit, or tab restore when idle: NEVER auto-run!
@@ -1498,37 +1530,60 @@ function showPublishNoticeModal(meta) {
 }
 
 async function executePublishClick(meta) {
-  const publishBtn = findPublishButton();
+  const isFinalDesign = Boolean(meta.isLastDesign || (meta.curIdx >= meta.totalCount - 1));
+  const publishBtn = findPublishButton(isFinalDesign);
 
   if (publishBtn) {
     publishBtn.scrollIntoView({ behavior: "smooth", block: "center" });
     publishBtn.classList.add("tp-sitemap-target-glow");
 
-    if (meta.isBulkMode) {
-      if (!meta.isLastDesign) {
-        showToast(`🎉 Submitting Design #${meta.curIdx + 1}... Advancing to Design #${meta.curIdx + 2}`, "success", 2500);
-        markSessionActive();
-        await chrome.storage.local.set({
-          pendingAutoList: true,
-          advanceNextAfterFill: true,
-          activeDesignIndex: meta.curIdx + 1
-        });
-      } else {
-        showToast("🎉 Final design submitted! Publishing entire batch to TeePublic...", "success", 4000);
-        clearSessionActive();
-        await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
-      }
+    if (isFinalDesign) {
+      // Entire batch completed: disarm all autopilot state, set completion locks, and cease looping!
+      clearSessionActive();
+      sessionStorage.setItem("TP_BATCH_COMPLETED", "true");
+      await chrome.storage.local.set({
+        pendingAutoList: false,
+        advanceNextAfterFill: false,
+        batchCompleted: true,
+        activeDesignIndex: 0
+      });
+      isListingInProgress = false;
+      updateTracker(6, 100, "🎉 All designs published! Batch complete.");
+      updateHUDStatus("completed", "✓ BATCH COMPLETE");
+      showToast("🎉 Final design submitted! All designs published successfully.", "success", 5000);
+    } else if (meta.isBulkMode) {
+      showToast(`🎉 Submitting Design #${meta.curIdx + 1}... Advancing to Design #${meta.curIdx + 2}`, "success", 2500);
+      markSessionActive();
+      await chrome.storage.local.set({
+        pendingAutoList: true,
+        advanceNextAfterFill: true,
+        activeDesignIndex: meta.curIdx + 1,
+        batchCompleted: false
+      });
     } else {
       if (meta.advanceNext && meta.curIdx < meta.totalCount - 1) {
         const nextIdx = meta.curIdx + 1;
         markSessionActive();
-        await chrome.storage.local.set({ activeDesignIndex: nextIdx, pendingAutoList: true, advanceNextAfterFill: true });
+        await chrome.storage.local.set({
+          activeDesignIndex: nextIdx,
+          pendingAutoList: true,
+          advanceNextAfterFill: true,
+          batchCompleted: false
+        });
         setTimeout(() => {
           window.location.href = "https://www.teepublic.com/designs/bulk_uploader";
         }, 1200);
       } else {
         clearSessionActive();
-        await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
+        sessionStorage.setItem("TP_BATCH_COMPLETED", "true");
+        await chrome.storage.local.set({
+          pendingAutoList: false,
+          advanceNextAfterFill: false,
+          batchCompleted: true,
+          activeDesignIndex: 0
+        });
+        isListingInProgress = false;
+        showToast("🎉 Final design submitted! Batch complete.", "success", 5000);
       }
     }
 
@@ -1536,6 +1591,17 @@ async function executePublishClick(meta) {
       publishBtn.click();
     }, 400);
   } else {
+    if (isFinalDesign) {
+      clearSessionActive();
+      sessionStorage.setItem("TP_BATCH_COMPLETED", "true");
+      await chrome.storage.local.set({
+        pendingAutoList: false,
+        advanceNextAfterFill: false,
+        batchCompleted: true,
+        activeDesignIndex: 0
+      });
+      isListingInProgress = false;
+    }
     showToast("✓ Ready! Click the green Publish button at the bottom of the page.", "success", 4000);
   }
 }
@@ -1980,10 +2046,12 @@ function normalizeColorName(col) {
 }
 
 function getBulkEditorProgress() {
-  const statusEl = document.querySelector('.m-uploader__bulk-status-text');
+  const pattern = /(?:Currently\s*Editing\s*Design|Editing\s*Design|Design|Item)\s*#?\s*(\d+)\s*(?:of|\/)\s*(\d+)/i;
+
+  const statusEl = document.querySelector('.m-uploader__bulk-status-text, .m-uploader__bulk-status, [data-test="bulk-status"], .bulk-status');
   if (statusEl) {
     const text = statusEl.textContent || statusEl.innerText || '';
-    const match = text.match(/Currently\s*Editing\s*Design\s*(\d+)\s*of\s*(\d+)/i);
+    const match = text.match(pattern);
     if (match) {
       return {
         currentIndex: parseInt(match[1], 10) - 1,
@@ -1994,7 +2062,7 @@ function getBulkEditorProgress() {
   }
 
   const allText = document.body.innerText || '';
-  const match = allText.match(/Currently\s*Editing\s*Design\s*(\d+)\s*of\s*(\d+)/i);
+  const match = allText.match(pattern);
   if (match) {
     return {
       currentIndex: parseInt(match[1], 10) - 1,
@@ -2006,23 +2074,33 @@ function getBulkEditorProgress() {
   return null;
 }
 
-function findPublishButton() {
-  // 1. Bulk uploader explicit submit buttons
-  const bulkNext = document.querySelector('input[type="submit"][value*="Next"], button[value*="Next"], input.btn--next, .btn-next-design');
-  if (bulkNext) return bulkNext;
+function findPublishButton(isLastDesign = false) {
+  if (isLastDesign) {
+    // 1. On last design, prioritize Publish All / Publish button
+    const bulkSubmit = document.querySelector('input[type="submit"][value*="Publish"], button[value*="Publish"], input.save-publish-later-button[value*="Publish"], input.save-publish-later-button, button.publish-and-promote-button, button[value="publish"]');
+    if (bulkSubmit) return bulkSubmit;
 
-  const bulkSubmit = document.querySelector('input[type="submit"][value="Publish All"], input.save-publish-later-button[value="Publish All"], input.save-publish-later-button');
-  if (bulkSubmit) return bulkSubmit;
+    const greenBtn = document.querySelector('.save-publish-later-button.btn--green, input[type="submit"].btn--green, button.btn--green, input[type="submit"].btn--primary, button.btn--primary');
+    if (greenBtn) return greenBtn;
+  } else {
+    // 1. Bulk uploader explicit submit Next buttons (when advancing design-by-design)
+    const bulkNext = document.querySelector('input[type="submit"][value*="Next"], button[value*="Next"], input.btn--next, .btn-next-design');
+    if (bulkNext && !bulkNext.disabled) return bulkNext;
+  }
 
-  // 2. Publish and promote button
+  // 2. Fallback to Publish buttons
+  const bulkSubmitFallback = document.querySelector('input[type="submit"][value*="Publish"], input.save-publish-later-button[value*="Publish"], input.save-publish-later-button');
+  if (bulkSubmitFallback) return bulkSubmitFallback;
+
+  // 3. Publish and promote button
   const publishBtn = document.querySelector('button.publish-and-promote-button, button[value="publish"]');
   if (publishBtn) return publishBtn;
 
-  // 3. Green CTA submit button
-  const greenBtn = document.querySelector('.save-publish-later-button.btn--green, input[type="submit"].btn--green, button.btn--green, input[type="submit"].btn--primary, button.btn--primary');
-  if (greenBtn) return greenBtn;
+  // 4. Green CTA submit button
+  const greenBtnFallback = document.querySelector('.save-publish-later-button.btn--green, input[type="submit"].btn--green, button.btn--green, input[type="submit"].btn--primary, button.btn--primary');
+  if (greenBtnFallback) return greenBtnFallback;
 
-  // 4. Any submit button in the design form
+  // 5. Any submit button in the design form
   const formSubmit = document.querySelector('form.edit_design input[type="submit"], form#edit_design input[type="submit"], form[action*="/designs/"] input[type="submit"], form[action*="/designs/"] button[type="submit"]');
   if (formSubmit) return formSubmit;
 
