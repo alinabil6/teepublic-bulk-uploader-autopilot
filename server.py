@@ -331,6 +331,16 @@ def index():
 def get_state():
     return jsonify(state.to_dict())
 
+@app.route("/api/progress", methods=["POST", "GET"])
+def studio_progress():
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        current = int(data.get("current", 0))
+        total = int(data.get("total", len(state.designs)))
+        state.set_progress(current, total)
+        return jsonify({"success": True, "progress": state.progress})
+    return jsonify({"success": True, "progress": state.progress})
+
 @app.route("/api/sync", methods=["POST", "GET"])
 def sync_studio():
     """

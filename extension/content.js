@@ -519,6 +519,31 @@ async function executeMasterWorkflow(advanceNext = true) {
         }
 
         if (dt.items.length > 0) {
+          // Configure TeePublic Dropzone for strict sequential processing (parallelUploads: 1)
+          // to eliminate S3 out-of-order completion race conditions
+          try {
+            const scrDz = document.createElement("script");
+            scrDz.textContent = `
+              (function() {
+                try {
+                  if (window.Dropzone) {
+                    if (window.Dropzone.instances && Array.isArray(window.Dropzone.instances)) {
+                      window.Dropzone.instances.forEach(function(dz) {
+                        dz.options.parallelUploads = 1;
+                        dz.options.autoProcessQueue = true;
+                      });
+                    }
+                    if (window.Dropzone.prototype && window.Dropzone.prototype.defaultOptions) {
+                      window.Dropzone.prototype.defaultOptions.parallelUploads = 1;
+                    }
+                  }
+                } catch(e) {}
+              })();
+            `;
+            (document.head || document.documentElement).appendChild(scrDz);
+            scrDz.remove();
+          } catch (_) {}
+
           fileInput.files = dt.files;
           fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
           fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -725,10 +750,14 @@ async function executeMasterWorkflow(advanceNext = true) {
         if (uploadedCount > 0) {
           const pct = Math.min(58, 35 + Math.round((uploadedCount / totalUploadCount) * 23));
           updateTracker(3, pct, `TeePublic uploaded ${uploadedCount}/${totalUploadCount} design(s)...`);
+          if (attempt % 3 === 0) {
+            await captureUploadMap();
+          }
         }
 
         detectedBtnObj = findVisibleGetStartedButton();
         if (detectedBtnObj) {
+          await captureUploadMap();
           break;
         }
 
@@ -738,6 +767,7 @@ async function executeMasterWorkflow(advanceNext = true) {
           const s3Btn = document.querySelector('.jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button, .jsBulkUploaderSubmit');
           if (s3Btn) {
             detectedBtnObj = { btn: s3Btn, type: 's3' };
+            await captureUploadMap();
             break;
           }
         }
@@ -823,22 +853,41 @@ async function executeMasterWorkflow(advanceNext = true) {
     const bulkProgress = getBulkEditorProgress();
     let isBulkMode = false;
     let isLastDesign = false;
+    let tpHumanIdx = curIdx + 1;
 
     if (bulkProgress) {
       curIdx = bulkProgress.currentIndex; // 0-based
       totalCount = Math.max(bulkProgress.totalCount, designs.length);
+      tpHumanIdx = bulkProgress.humanIndex;
       isBulkMode = true;
-      isLastDesign = (curIdx >= totalCount - 1);
+      // TeePublic's actual batch position determines whether it is the last design in batch
+      isLastDesign = (bulkProgress.currentIndex >= bulkProgress.totalCount - 1);
     } else {
       isBulkMode = false;
       isLastDesign = (curIdx >= totalCount - 1);
+      tpHumanIdx = curIdx + 1;
     }
 
-    // Refresh design object for this exact index!
-    design = (designs && designs[curIdx]) ? designs[curIdx] : ((designs && designs[0]) ? designs[0] : null);
+    // Capture storage mappings (Upload Map from Bulk Dropzone)
+    const store = await chrome.storage.local.get({ tpDesignMap: {}, tpOrderedIds: [] });
+
+    // 3-Layer Content-Aware Intelligent Matching:
+    // Discards blind index matching and accurately identifies the design
+    // using URL ID mapping, on-page filename candidates, and artwork cues!
+    const resolvedDesign = await resolveActiveDesign(designs, curIdx, totalCount, store);
+
+    if (resolvedDesign) {
+      design = resolvedDesign;
+      const matchedIdx = designs.indexOf(design);
+      if (matchedIdx >= 0) {
+        curIdx = matchedIdx;
+      }
+    } else {
+      design = (designs && designs[curIdx]) ? designs[curIdx] : ((designs && designs[0]) ? designs[0] : null);
+    }
 
     if (!design) {
-      showToast(`⚠️ No design found in queue at index #${curIdx + 1}!`, "warning", 4000);
+      showToast(`⚠️ No design found in queue for active item #${tpHumanIdx}!`, "warning", 4000);
       isListingInProgress = false;
       return;
     }
@@ -853,8 +902,17 @@ async function executeMasterWorkflow(advanceNext = true) {
 
     updateHUDLabels(design, curIdx, totalCount);
     designTitle = design.title || design.file_name || `Design #${curIdx + 1}`;
-    showToast(`📝 Autopilot [${curIdx + 1}/${totalCount}]: "${designTitle.substring(0, 24)}..."`, "info", 2000);
+    showToast(`📝 Autopilot [${tpHumanIdx}/${totalCount}]: "${designTitle.substring(0, 24)}..."`, "info", 2000);
     await sleep(500);
+
+    // Sync live progress with Desktop Studio (port 5050)
+    try {
+      fetch('http://127.0.0.1:5050/api/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current: tpHumanIdx, total: totalCount, design_title: designTitle })
+      }).catch(() => {});
+    } catch (_) {}
 
     // 1. Live Typing Design Title
     const titleVal = design.title || "";
@@ -1530,7 +1588,8 @@ function showPublishNoticeModal(meta) {
 }
 
 async function executePublishClick(meta) {
-  const isFinalDesign = Boolean(meta.isLastDesign || (meta.curIdx >= meta.totalCount - 1));
+  const hasNextBtn = Boolean(document.querySelector('input[type="submit"][value*="Next"], button[value*="Next"], input.btn--next, .btn-next-design'));
+  const isFinalDesign = Boolean(meta.isLastDesign || (!hasNextBtn && meta.isBulkMode));
   const publishBtn = findPublishButton(isFinalDesign);
 
   if (publishBtn) {
@@ -1552,7 +1611,7 @@ async function executePublishClick(meta) {
       updateHUDStatus("completed", "✓ BATCH COMPLETE");
       showToast("🎉 Final design submitted! All designs published successfully.", "success", 5000);
     } else if (meta.isBulkMode) {
-      showToast(`🎉 Submitting Design #${meta.curIdx + 1}... Advancing to Design #${meta.curIdx + 2}`, "success", 2500);
+      showToast(`🎉 Submitting Design #${meta.curIdx + 1}... Advancing to Next Design`, "success", 2500);
       markSessionActive();
       await chrome.storage.local.set({
         pendingAutoList: true,
@@ -1590,6 +1649,32 @@ async function executePublishClick(meta) {
     setTimeout(() => {
       publishBtn.click();
     }, 400);
+
+    // Watch for in-page AJAX transition if TeePublic does not perform a 302 full page redirect
+    if (meta.isBulkMode && !isFinalDesign) {
+      const initialDesignId = (window.location.pathname.match(/\/designs\/(\d+)/i) || [])[1];
+      let ajaxWatchAttempts = 0;
+      const ajaxWatchInterval = setInterval(async () => {
+        ajaxWatchAttempts++;
+        if (ajaxWatchAttempts > 40) {
+          clearInterval(ajaxWatchInterval);
+          return;
+        }
+
+        const currentDesignId = (window.location.pathname.match(/\/designs\/(\d+)/i) || [])[1];
+        const currentProgress = getBulkEditorProgress();
+
+        if ((currentDesignId && currentDesignId !== initialDesignId) || 
+            (currentProgress && currentProgress.currentIndex !== meta.curIdx)) {
+          clearInterval(ajaxWatchInterval);
+          console.log("[TeePublic Autopilot] In-page AJAX transition detected. Resuming workflow...");
+          await sleep(600);
+          if (!isListingInProgress) {
+            executeMasterWorkflow(true);
+          }
+        }
+      }, 500);
+    }
   } else {
     if (isFinalDesign) {
       clearSessionActive();
@@ -2043,6 +2128,320 @@ function normalizeColorName(col) {
   if (s === "dark") return "black";
   if (s === "light") return "white";
   return s;
+}
+
+// ===================================================================
+// 3-LAYER CONTENT-AWARE MATCHING ENGINE & UPLOAD TRACKER
+// ===================================================================
+
+async function captureUploadMap() {
+  const map = {};
+  const orderedIds = [];
+
+  // 1. Inspect DOM for completed artwork elements
+  const imageElements = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage, [data-design-id]');
+  imageElements.forEach(el => {
+    const dId = el.getAttribute('data-design-id') || el.dataset?.designId;
+    if (!dId) return;
+    const strId = String(dId).trim();
+    if (!strId || strId === "undefined" || strId === "null") return;
+
+    if (!orderedIds.includes(strId)) {
+      orderedIds.push(strId);
+    }
+
+    let fname = el.getAttribute('alt') || el.getAttribute('title') || el.dataset?.filename || '';
+    if (!fname && el.parentElement) {
+      const nameEl = el.parentElement.querySelector('.dz-filename, [data-dz-name], .filename');
+      if (nameEl) fname = nameEl.textContent || '';
+    }
+    if (!fname && el.closest) {
+      const card = el.closest('.dz-preview, .jsBulkUploaderImage, .img_holder');
+      if (card) {
+        const nameEl = card.querySelector('.dz-filename, [data-dz-name], .filename');
+        if (nameEl) fname = nameEl.textContent || '';
+      }
+    }
+    if (fname) {
+      map[strId] = fname.trim();
+    }
+  });
+
+  // 2. Query Dropzone.instances in page world
+  try {
+    const scr = document.createElement("script");
+    scr.textContent = `
+      (function() {
+        try {
+          var dzMap = {};
+          var dzIds = [];
+          if (window.Dropzone && window.Dropzone.instances) {
+            window.Dropzone.instances.forEach(function(dz) {
+              if (dz.files && Array.isArray(dz.files)) {
+                dz.files.forEach(function(f) {
+                  var fname = f.name || '';
+                  var dId = null;
+                  if (f.previewElement) {
+                    var el = f.previewElement.querySelector('[data-design-id]');
+                    if (el) dId = el.getAttribute('data-design-id');
+                  }
+                  if (!dId && f.xhr && f.xhr.responseText) {
+                    try {
+                      var parsed = JSON.parse(f.xhr.responseText);
+                      dId = parsed.id || parsed.design_id || parsed.designId;
+                    } catch(_) {}
+                  }
+                  if (dId && fname) {
+                    dzMap[String(dId)] = fname;
+                    if (dzIds.indexOf(String(dId)) === -1) dzIds.push(String(dId));
+                  }
+                });
+              }
+            });
+          }
+          var carrier = document.getElementById('__tp_upload_map_carrier');
+          if (!carrier) {
+            carrier = document.createElement('div');
+            carrier.id = '__tp_upload_map_carrier';
+            carrier.style.display = 'none';
+            document.documentElement.appendChild(carrier);
+          }
+          carrier.setAttribute('data-map', JSON.stringify(dzMap));
+          carrier.setAttribute('data-ids', JSON.stringify(dzIds));
+          try {
+            var existing = JSON.parse(sessionStorage.getItem('TP_DESIGN_MAP') || '{}');
+            sessionStorage.setItem('TP_DESIGN_MAP', JSON.stringify(Object.assign(existing, dzMap)));
+          } catch(_) {}
+        } catch(e) {}
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(scr);
+    scr.remove();
+
+    const carrier = document.getElementById('__tp_upload_map_carrier');
+    if (carrier) {
+      try {
+        const pageMap = JSON.parse(carrier.getAttribute('data-map') || '{}');
+        const pageIds = JSON.parse(carrier.getAttribute('data-ids') || '[]');
+        Object.assign(map, pageMap);
+        pageIds.forEach(id => {
+          if (!orderedIds.includes(String(id))) orderedIds.push(String(id));
+        });
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  // 3. Persist to storage & sessionStorage
+  if (Object.keys(map).length > 0 || orderedIds.length > 0) {
+    try {
+      sessionStorage.setItem("TP_DESIGN_MAP", JSON.stringify(map));
+      sessionStorage.setItem("TP_ORDERED_IDS", JSON.stringify(orderedIds));
+    } catch (_) {}
+    await chrome.storage.local.set({
+      tpDesignMap: map,
+      tpOrderedIds: orderedIds
+    });
+  }
+
+  return { map, orderedIds };
+}
+
+function detectOnPageDesignCandidates() {
+  const candidates = [];
+  const addCandidate = (val) => {
+    if (!val) return;
+    const clean = String(val).trim();
+    if (!clean) return;
+    const lower = clean.toLowerCase();
+    const GENERIC_DISCARD = new Set([
+      '', 'design', 'designs', 't-shirt', 'tshirt', 'edit', 'teepublic',
+      'undefined', 'null', 'image', 'photo', 'artwork', 'preview',
+      'mockup', 'untitled', 'classic', 'male fit', 'female fit', 'front', 'back'
+    ]);
+    if (GENERIC_DISCARD.has(lower)) return;
+    if (!candidates.includes(clean)) {
+      candidates.push(clean);
+    }
+  };
+
+  // 1. Initial title input field value, defaultValue, attribute value, placeholder
+  const titleEl = document.querySelector('#design_design_title, input[name="design[design_title]"]');
+  if (titleEl) {
+    addCandidate(titleEl.defaultValue);
+    addCandidate(titleEl.getAttribute('value'));
+    addCandidate(titleEl.value);
+    addCandidate(titleEl.placeholder);
+  }
+
+  // 2. Hidden inputs in the design form
+  const hiddenInputs = document.querySelectorAll(
+    'input[name*="filename"], input[name*="original"], input[name*="s3_key"], ' +
+    'input[name*="image"], input[name*="asset"], input[data-filename]'
+  );
+  hiddenInputs.forEach(inp => {
+    addCandidate(inp.value);
+    addCandidate(inp.dataset?.filename);
+  });
+
+  // 3. Form dataset attributes
+  const designForm = document.querySelector('form.edit_design, form#edit_design, form[action*="/designs/"]');
+  if (designForm && designForm.dataset) {
+    Object.values(designForm.dataset).forEach(val => addCandidate(val));
+  }
+
+  // 4. Artwork / Mockup images on page
+  const previewImgs = document.querySelectorAll(
+    '.canvas img, .m-uploader__preview img, #design-image, .design-image, ' +
+    '.img_holder img, img[src*="artwork"], img[src*="s3"], img[src*="production"], ' +
+    '.m-uploader__bulk-thumbs img, .jsBulkThumb'
+  );
+  previewImgs.forEach(img => {
+    addCandidate(img.getAttribute('alt'));
+    addCandidate(img.getAttribute('title'));
+    addCandidate(img.dataset?.filename);
+    const src = img.getAttribute('src') || '';
+    if (src && !src.startsWith('data:') && !src.startsWith('blob:')) {
+      try {
+        const urlBase = src.split('?')[0].split('#')[0];
+        const fname = decodeURIComponent(urlBase.split('/').pop() || '');
+        if (fname && fname.includes('.')) {
+          addCandidate(fname);
+        }
+      } catch (_) {}
+    }
+  });
+
+  // 5. Document title / OpenGraph metadata
+  const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content');
+  if (ogTitle) addCandidate(ogTitle);
+
+  return candidates;
+}
+
+function findDesignByCandidateName(designs, candidateName) {
+  if (!Array.isArray(designs) || designs.length === 0 || !candidateName) return null;
+  const raw = String(candidateName).trim();
+  if (!raw) return null;
+
+  const cleanExt = (s) => String(s || '').replace(/\.(png|jpg|jpeg|webp|svg)$/i, '').trim();
+  const normAlpha = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const candNorm = normAlpha(raw);
+  const candStem = cleanExt(raw);
+  const candStemNorm = normAlpha(candStem);
+
+  // Pass 1: Exact filename match (case-insensitive)
+  for (const d of designs) {
+    if (d.file_name && d.file_name.trim().toLowerCase() === raw.toLowerCase()) return d;
+    if (d.original_filename && d.original_filename.trim().toLowerCase() === raw.toLowerCase()) return d;
+  }
+
+  // Pass 2: Filename stem match (e.g. "2" matching "2.png" or "18" matching "18.png")
+  if (candStem.length > 0) {
+    for (const d of designs) {
+      if (d.file_name && cleanExt(d.file_name).toLowerCase() === candStem.toLowerCase()) return d;
+      if (d.original_filename && cleanExt(d.original_filename).toLowerCase() === candStem.toLowerCase()) return d;
+    }
+  }
+
+  // Pass 3: Title exact match (case-insensitive)
+  for (const d of designs) {
+    if (d.title && d.title.trim().toLowerCase() === raw.toLowerCase()) return d;
+  }
+
+  // Pass 4: Normalized alphanumeric match on filename stem
+  if (candStemNorm.length > 0) {
+    for (const d of designs) {
+      const dStem = normAlpha(cleanExt(d.file_name || ''));
+      const dOrigStem = normAlpha(cleanExt(d.original_filename || ''));
+      if (dStem && dStem === candStemNorm) return d;
+      if (dOrigStem && dOrigStem === candStemNorm) return d;
+    }
+  }
+
+  // Pass 5: Normalized alphanumeric match on title
+  if (candNorm.length > 2) {
+    for (const d of designs) {
+      const dTitleNorm = normAlpha(d.title || '');
+      if (dTitleNorm && dTitleNorm === candNorm) return d;
+    }
+  }
+
+  // Pass 6: Substring / Containment match on filename stem or title
+  if (candStemNorm.length >= 4) {
+    for (const d of designs) {
+      const dStem = normAlpha(cleanExt(d.file_name || ''));
+      const dTitle = normAlpha(d.title || '');
+      if (dStem && (dStem.includes(candStemNorm) || candStemNorm.includes(dStem))) return d;
+      if (dTitle && (dTitle.includes(candStemNorm) || candStemNorm.includes(dTitle))) return d;
+    }
+  }
+
+  return null;
+}
+
+async function resolveActiveDesign(designs, fallbackIdx, totalCount, store = {}) {
+  if (!Array.isArray(designs) || designs.length === 0) return null;
+
+  const urlMatch = window.location.pathname.match(/\/designs\/(\d+)/i);
+  const designId = urlMatch ? urlMatch[1] : null;
+
+  let tpDesignMap = store.tpDesignMap || {};
+  let tpOrderedIds = store.tpOrderedIds || [];
+
+  try {
+    const sessMap = sessionStorage.getItem("TP_DESIGN_MAP");
+    if (sessMap) {
+      const parsed = JSON.parse(sessMap);
+      tpDesignMap = Object.assign({}, parsed, tpDesignMap);
+    }
+    const sessIds = sessionStorage.getItem("TP_ORDERED_IDS");
+    if (sessIds) {
+      const parsed = JSON.parse(sessIds);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        tpOrderedIds = parsed;
+      }
+    }
+  } catch (_) {}
+
+  // Strategy 1: URL Design ID -> Captured Upload Map
+  if (designId && tpDesignMap[designId]) {
+    const targetName = tpDesignMap[designId];
+    const match = findDesignByCandidateName(designs, targetName);
+    if (match) {
+      console.log(`[TeePublic Autopilot] Resolved design by URL ID #${designId} -> "${targetName}" (${match.file_name})`);
+      return match;
+    }
+  }
+
+  // Strategy 2: On-page filename / title candidate cues
+  const candidates = detectOnPageDesignCandidates();
+  for (const cand of candidates) {
+    const match = findDesignByCandidateName(designs, cand);
+    if (match) {
+      console.log(`[TeePublic Autopilot] Resolved design by on-page cue "${cand}" -> ${match.file_name}`);
+      return match;
+    }
+  }
+
+  // Strategy 3: Ordered IDs array index correlation
+  if (designId && Array.isArray(tpOrderedIds) && tpOrderedIds.length > 0) {
+    const pos = tpOrderedIds.indexOf(String(designId)) !== -1 
+      ? tpOrderedIds.indexOf(String(designId)) 
+      : tpOrderedIds.indexOf(Number(designId));
+    if (pos >= 0 && designs[pos]) {
+      console.log(`[TeePublic Autopilot] Resolved design by upload position [${pos}] -> ${designs[pos].file_name}`);
+      return designs[pos];
+    }
+  }
+
+  // Strategy 4: Fallback to queue index
+  if (fallbackIdx >= 0 && fallbackIdx < designs.length) {
+    console.log(`[TeePublic Autopilot] Fallback to queue index [${fallbackIdx}] -> ${designs[fallbackIdx].file_name}`);
+    return designs[fallbackIdx];
+  }
+
+  return designs[0] || null;
 }
 
 function getBulkEditorProgress() {
