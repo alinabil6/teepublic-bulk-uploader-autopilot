@@ -997,10 +997,10 @@ async function executeMasterWorkflow(advanceNext = true) {
     // ===============================================================
     // WORKFLOW PART 4: NOTICE & PUBLISH
     // ===============================================================
-    updateTracker(6, 100, `Design #${curIdx + 1}/${totalCount} 100% Configured!`);
+    updateTracker(6, 100, `Design #${tpHumanIdx}/${totalCount} 100% Configured!`);
     updateHUDStatus("completed", "✓ READY TO PUB");
 
-    showToast(`🎉 Design #${curIdx + 1}/${totalCount} configured!`, "success", 2500);
+    showToast(`🎉 Design #${tpHumanIdx}/${totalCount} configured!`, "success", 2500);
     await sleep(400);
 
     // Display the High-Visibility Notice Modal on screen
@@ -1011,6 +1011,7 @@ async function executeMasterWorkflow(advanceNext = true) {
       placement: placement.toUpperCase(),
       advanceNext: advanceNext || isBulkMode,
       curIdx: curIdx,
+      tpHumanIdx: tpHumanIdx,
       totalCount: totalCount,
       isBulkMode: isBulkMode,
       isLastDesign: isLastDesign
@@ -1502,9 +1503,10 @@ function showPublishNoticeModal(meta) {
     document.body.appendChild(modal);
   }
 
+  const displayNum = meta.tpHumanIdx || (meta.curIdx + 1);
   const nextBtnLabel = meta.isLastDesign 
     ? "🚀 Publish Entire Batch Now" 
-    : `🚀 Advance to Design #${meta.curIdx + 2} of ${meta.totalCount}`;
+    : `🚀 Advance to Next Design (${displayNum + 1} of ${meta.totalCount})`;
 
   modal.innerHTML = `
     <div class="notice-card">
@@ -1531,7 +1533,7 @@ function showPublishNoticeModal(meta) {
         </div>
         <div class="notice-summary-row">
           <span class="notice-label">Batch Progress:</span>
-          <span class="notice-val highlight">Design ${meta.curIdx + 1} of ${meta.totalCount}</span>
+          <span class="notice-val highlight">Design ${displayNum} of ${meta.totalCount}</span>
         </div>
       </div>
 
@@ -1611,7 +1613,8 @@ async function executePublishClick(meta) {
       updateHUDStatus("completed", "✓ BATCH COMPLETE");
       showToast("🎉 Final design submitted! All designs published successfully.", "success", 5000);
     } else if (meta.isBulkMode) {
-      showToast(`🎉 Submitting Design #${meta.curIdx + 1}... Advancing to Next Design`, "success", 2500);
+      const displayNum = meta.tpHumanIdx || (meta.curIdx + 1);
+      showToast(`🎉 Submitting Design #${displayNum}... Advancing to Next Design`, "success", 2500);
       markSessionActive();
       await chrome.storage.local.set({
         pendingAutoList: true,
