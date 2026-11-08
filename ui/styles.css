@@ -1885,11 +1885,6 @@ h1, h2, h3, h4, h5, h6,
   background: rgba(15, 23, 42, 0.85);
 }
 
-.tp-select option {
-  background: #0F172A;
-  color: #F8FAFC;
-}
-
 .tp-textarea {
   resize: vertical;
 }

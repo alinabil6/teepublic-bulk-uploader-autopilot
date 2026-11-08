@@ -504,32 +504,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `"${str.replace(/"/g, '""')}"`;
   }
 
-  async function getStoredScrapedDesigns() {
-    const store = await chrome.storage.local.get(["scrapedCompetitorDesigns", "scrapedListings"]);
-    const arr1 = Array.isArray(store.scrapedCompetitorDesigns) ? store.scrapedCompetitorDesigns : [];
-    const arr2 = Array.isArray(store.scrapedListings) ? store.scrapedListings : [];
-
-    const combined = [];
-    const seen = new Set();
-    for (const item of [...arr1, ...arr2]) {
-      if (!item) continue;
-      if (!Array.isArray(item.tags) && Array.isArray(item.allTags)) {
-        item.tags = item.allTags;
-      }
-      const key = (item.url || item.title || "").trim().toLowerCase();
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        combined.push(item);
-      } else if (!key) {
-        combined.push(item);
-      }
-    }
-    return combined;
-  }
-
   // 1. Download Magic Listing Format CSV (matches magic_listings_export_YYYY-MM-DD.csv)
   btnDownloadMagicCsv.addEventListener("click", async () => {
-    const designs = await getStoredScrapedDesigns();
+    const store = await chrome.storage.local.get({ scrapedCompetitorDesigns: [] });
+    const designs = store.scrapedCompetitorDesigns || [];
 
     if (designs.length === 0) {
       alert("No designs collected yet! Open TeePublic competitor tabs and click 'Grab Listing' or press Alt+S.");
@@ -569,12 +547,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const csvContent = lines.join("\r\n");
     const today = new Date().toISOString().split("T")[0];
-    triggerFileDownload(csvContent, `magic_listings_export_${today}.csv`, btnDownloadMagicCsv);
+    triggerFileDownload(csvContent, `magic_listings_export_${today}.csv`);
   });
 
   // 2. Download 2-Row Format CSV (Exact format shown in user's Image 3: Row 1 = Title, Row 2 = Tags)
   btnDownloadTwoRowCsv.addEventListener("click", async () => {
-    const designs = await getStoredScrapedDesigns();
+    const store = await chrome.storage.local.get({ scrapedCompetitorDesigns: [] });
+    const designs = store.scrapedCompetitorDesigns || [];
 
     if (designs.length === 0) {
       alert("No designs collected yet! Open TeePublic competitor tabs and click 'Grab Listing' or press Alt+S.");
@@ -592,68 +571,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const csvContent = lines.join("\r\n");
     const today = new Date().toISOString().split("T")[0];
-    triggerFileDownload(csvContent, `teepublic_competitor_tags_2row_${today}.csv`, btnDownloadTwoRowCsv);
+    triggerFileDownload(csvContent, `teepublic_competitor_tags_2row_${today}.csv`);
   });
 
-  function triggerFileDownload(content, filename, btnElement) {
-    const bom = "\uFEFF";
-    const fullContent = bom + content;
-    let success = false;
-
-    // Strategy 1: HTML5 <a> with Blob URL (Universal in Firefox, Tor, Chrome)
-    try {
-      const blob = new Blob([fullContent], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.style.display = "none";
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-
-      // Dispatch click event (Firefox / Tor compatible)
-      a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-
-      // Keep blob URL alive in memory for 30s so Firefox never cancels the download mid-save
-      setTimeout(() => {
-        try {
-          if (a.parentNode) a.parentNode.removeChild(a);
-          URL.revokeObjectURL(url);
-        } catch (_) {}
-      }, 30000);
-      success = true;
-    } catch (err1) {
-      console.warn("Blob download error:", err1);
-    }
-
-    // Strategy 2: HTML5 <a> with Data URI fallback (if Blob is blocked by Tor)
-    if (!success) {
-      try {
-        const dataUri = "data:text/csv;charset=utf-8," + encodeURIComponent(fullContent);
-        const a = document.createElement("a");
-        a.style.display = "none";
-        a.href = dataUri;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-        setTimeout(() => {
-          try { if (a.parentNode) a.parentNode.removeChild(a); } catch (_) {}
-        }, 5000);
-        success = true;
-      } catch (err2) {
-        console.warn("Data URI download error:", err2);
-      }
-    }
-
-    // Visual button feedback
-    if (btnElement) {
-      const orig = btnElement.innerHTML;
-      btnElement.innerHTML = `<span>✓</span> Downloaded!`;
-      setTimeout(() => {
-        btnElement.innerHTML = orig;
-      }, 2500);
-    }
-
-    return success;
+  function triggerFileDownload(content, filename) {
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
   }
 
   // ===================================================================
@@ -696,12 +626,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   btnClearScrapedList.addEventListener("click", async () => {
-    const designs = await getStoredScrapedDesigns();
-    const count = designs.length;
+    const store = await chrome.storage.local.get({ scrapedCompetitorDesigns: [] });
+    const count = (store.scrapedCompetitorDesigns || []).length;
     if (count === 0) return;
 
     if (confirm(`Are you sure you want to clear all ${count} collected competitor designs?`)) {
-      await chrome.storage.local.set({ scrapedCompetitorDesigns: [], scrapedListings: [] });
+      await chrome.storage.local.set({ scrapedCompetitorDesigns: [] });
       renderScrapedDesignsList([]);
     }
   });
@@ -746,8 +676,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   updateAutopilotToggleUI(data.extensionEnabled);
   updateScraperToggleUI(data.scraperEnabled !== false);
-  const initialScraped = await getStoredScrapedDesigns();
-  renderScrapedDesignsList(initialScraped);
+  renderScrapedDesignsList(data.scrapedCompetitorDesigns || []);
 
   prefColorMode.value = data.prefColorMode;
   prefPrintLocation.value = data.prefPrintLocation;
@@ -772,8 +701,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (changes.scraperEnabled !== undefined) {
         updateScraperToggleUI(Boolean(changes.scraperEnabled.newValue));
       }
-      if (changes.scrapedCompetitorDesigns !== undefined || changes.scrapedListings !== undefined) {
-        getStoredScrapedDesigns().then(d => renderScrapedDesignsList(d));
+      if (changes.scrapedCompetitorDesigns !== undefined) {
+        renderScrapedDesignsList(changes.scrapedCompetitorDesigns.newValue || []);
       }
       if (changes.cachedDesigns !== undefined || changes.activeDesignIndex !== undefined) {
         chrome.storage.local.get(["cachedDesigns", "activeDesignIndex"], res => {
