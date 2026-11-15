@@ -98,7 +98,7 @@ async function apiGetThumbnailBlob(index) {
   });
 }
 
-// Suppress blocking page alerts (e.g. TeePublic premature upload warnings)
+// Suppress blocking page alerts (e.g. TeePublic premature upload warnings) & surface errors
 function suppressPageAlerts() {
   try {
     const script = document.createElement("script");
@@ -109,6 +109,9 @@ function suppressPageAlerts() {
         const _orig = window.alert;
         window.alert = function(msg) {
           console.warn("[Magic Fabrica - Intercepted TeePublic Alert]:", msg);
+          try {
+            window.dispatchEvent(new CustomEvent("MF_TEEPUBLIC_ALERT", { detail: { message: String(msg) } }));
+          } catch(e) {}
         };
       })();
     `;
@@ -117,8 +120,19 @@ function suppressPageAlerts() {
   } catch (_) {}
 }
 
+window.addEventListener("MF_TEEPUBLIC_ALERT", (e) => {
+  const alertMsg = e.detail && e.detail.message ? e.detail.message : "TeePublic page alert";
+  console.warn("[Autopilot] Intercepted Alert:", alertMsg);
+  showToast("⚠️ TeePublic: " + alertMsg.substring(0, 100), "warning", 6000);
+  const saveBtn = document.querySelector(".save-publish-later-button");
+  if (saveBtn && saveBtn.disabled) {
+    saveBtn.disabled = false;
+  }
+});
+
 // Helper functions to manage tab-isolated autopilot session lifecycle
 function markSessionActive() {
+  sessionStorage.removeItem("TP_AUTOPILOT_COMPLETED");
   const now = Date.now().toString();
   sessionStorage.setItem("TP_AUTOPILOT_SESSION_ACTIVE", "true");
   sessionStorage.setItem("TP_AUTOPILOT_SESSION_TIME", now);
@@ -131,6 +145,7 @@ function clearSessionActive() {
   sessionStorage.removeItem("TP_AUTOPILOT_SESSION_TIME");
   sessionStorage.removeItem("TP_PIPELINE_CONTINUING");
   sessionStorage.removeItem("TP_AUTOPILOT_ACTIVE_SESSION");
+  sessionStorage.setItem("TP_AUTOPILOT_COMPLETED", "true");
 }
 
 // Initialize when page is ready
@@ -162,8 +177,17 @@ function clearSessionActive() {
 
   const pageType = getPageType();
 
+  // If on a completed, store, profile, or catalog page: Autopilot batch has finished!
+  // Unconditionally terminate any session and never redirect back to bulk uploader.
+  if (pageType === "COMPLETED_OR_EXTERNAL") {
+    clearSessionActive();
+    await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false, triggeredByPopupTimestamp: 0 });
+    return;
+  }
+
   // Check if this browser tab is currently running an active, user-authorized Autopilot session
   const isSessionActive = sessionStorage.getItem("TP_AUTOPILOT_SESSION_ACTIVE") === "true";
+  const isBatchCompleted = sessionStorage.getItem("TP_AUTOPILOT_COMPLETED") === "true";
   const sessionTime = parseInt(
     sessionStorage.getItem("TP_AUTOPILOT_SESSION_TIME") || 
     sessionStorage.getItem("TP_PIPELINE_CONTINUING") || 
@@ -174,7 +198,7 @@ function clearSessionActive() {
   const isSessionFresh = (isSessionActive || sessionTime > 0) && (Date.now() - sessionTime < 600000);
   const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 25000));
 
-  const shouldAutoContinue = isEnabled && (store.pendingAutoList || isSessionActive) && (isSessionFresh || isRecentPopupNav);
+  const shouldAutoContinue = isEnabled && !isBatchCompleted && (store.pendingAutoList || isSessionActive) && (isSessionFresh || isRecentPopupNav);
 
   if (shouldAutoContinue) {
     // Keep active session tokens alive in this tab across design page transitions & reloads
@@ -195,13 +219,16 @@ function clearSessionActive() {
       setTimeout(() => {
         executeMasterWorkflow(true);
       }, 400);
-    } else {
+    } else if (isRecentPopupNav) {
       setTimeout(() => {
         window.location.href = "https://www.teepublic.com/designs/bulk_uploader";
       }, 400);
+    } else {
+      clearSessionActive();
+      await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false, triggeredByPopupTimestamp: 0 });
     }
   } else {
-    // Direct window open, fresh manual visit, or tab restore when idle: NEVER auto-run!
+    // Direct window open, fresh manual visit, completed batch, or tab restore when idle: NEVER auto-run!
     await chrome.storage.local.set({ pendingAutoList: false, triggeredByPopupTimestamp: 0 });
     clearSessionActive();
   }
@@ -324,8 +351,21 @@ function getPageType() {
     return "DESIGN_EDIT";
   }
 
-  // Any other page (Store, Profile, Landing, or Empty Upload): Go to Bulk Uploader!
-  return "NAVIGATE_TO_BULK";
+  // Completed or non-uploader pages: Store, Profile, Dashboard, Account, Designs Catalog
+  if (
+    path.startsWith("/user/") || 
+    path.includes("/user/") || 
+    path === "/designs" || 
+    path === "/designs/" || 
+    path.includes("/my_account") || 
+    path.includes("/dashboard") ||
+    path.includes("/stores/") ||
+    path.includes("/settings")
+  ) {
+    return "COMPLETED_OR_EXTERNAL";
+  }
+
+  return "OTHER";
 }
 
 // Master Entry Point
@@ -480,6 +520,9 @@ async function executeMasterWorkflow(advanceNext = true) {
               localBlobUrls.push(bUrl);
               const file = new File([blob], fileName, { type: blob.type || "image/png" });
               dt.items.add(file);
+            } else {
+              console.warn(`[Autopilot] Could not fetch thumbnail for design #${i + 1} (${fileName})`);
+              showToast(`⚠️ Missing image file for design #${i + 1}: ${fileName}`, "warning", 3000);
             }
           } catch (e) {
             console.warn(`File attach warning for index ${i}:`, e);
@@ -487,6 +530,7 @@ async function executeMasterWorkflow(advanceNext = true) {
         }
 
         if (dt.items.length > 0) {
+          totalUploadCount = dt.items.length;
           fileInput.files = dt.files;
           fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
           fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -700,8 +744,14 @@ async function executeMasterWorkflow(advanceNext = true) {
           break;
         }
 
-        // Also check if TeePublic dropzone text says uploads are complete
-        const dropzoneText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message')?.textContent || '');
+        // Also check if TeePublic dropzone text says uploads are complete or failed
+        const dropzoneText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message, .jsBulkUploaderStatus')?.textContent || '');
+        if (dropzoneText.includes('DAILY LIMIT') || dropzoneText.includes('Some uploads failed')) {
+          if (!window.__tpDailyLimitWarned) {
+            window.__tpDailyLimitWarned = true;
+            showToast("⚠️ TeePublic daily quota or partial upload detected. Proceeding with uploaded designs...", "warning", 5000);
+          }
+        }
         if (dropzoneText.includes('Uploads complete') || dropzoneText.includes('Get Started')) {
           const s3Btn = document.querySelector('.jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button, .jsBulkUploaderSubmit');
           if (s3Btn) {
@@ -760,13 +810,13 @@ async function executeMasterWorkflow(advanceNext = true) {
     // ===============================================================
     updateTracker(4, 65, "Waiting for Listing Form to load...");
 
-    // Wait up to 30 seconds for the form to actually exist on the page (handles slow asset downloads in Tor/Brave)
+    // Wait up to 60 seconds for the form to actually exist on the page (handles slow asset downloads in Tor/Brave)
     let titleEl = null;
-    for (let wait = 0; wait < 60; wait++) {
+    for (let wait = 0; wait < 120; wait++) {
       titleEl = document.querySelector('#design_design_title, input[name="design[design_title]"]');
       if (titleEl) break;
       if (wait % 10 === 0 && wait > 0) {
-        updateTracker(4, 65, `Waiting for Listing Form (${Math.round((60 - wait) * 0.5)}s remaining)...`);
+        updateTracker(4, 65, `Waiting for Listing Form (${Math.round((120 - wait) * 0.5)}s remaining)...`);
       }
       await sleep(500);
     }
@@ -794,7 +844,7 @@ async function executeMasterWorkflow(advanceNext = true) {
 
     if (bulkProgress) {
       curIdx = bulkProgress.currentIndex; // 0-based
-      totalCount = Math.max(bulkProgress.totalCount, designs.length);
+      totalCount = bulkProgress.totalCount; // TeePublic bulk editor is single source of truth for current bulk batch
       isBulkMode = true;
       isLastDesign = (curIdx >= totalCount - 1);
     } else {
@@ -1487,7 +1537,8 @@ function showPublishNoticeModal(meta) {
     if (countdownTimer) clearInterval(countdownTimer);
     modal.classList.remove("visible");
     clearSessionActive();
-    await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
+    sessionStorage.setItem("TP_AUTOPILOT_COMPLETED", "true");
+    await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false, triggeredByPopupTimestamp: 0 });
     isListingInProgress = false;
     showToast("⏸️ Autopilot paused for inspection. Click Publish button when ready.", "info", 3000);
   };
@@ -1516,7 +1567,12 @@ async function executePublishClick(meta) {
       } else {
         showToast("🎉 Final design submitted! Publishing entire batch to TeePublic...", "success", 4000);
         clearSessionActive();
-        await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
+        sessionStorage.setItem("TP_AUTOPILOT_COMPLETED", "true");
+        await chrome.storage.local.set({
+          pendingAutoList: false,
+          advanceNextAfterFill: false,
+          triggeredByPopupTimestamp: 0
+        });
       }
     } else {
       if (meta.advanceNext && meta.curIdx < meta.totalCount - 1) {
@@ -1528,7 +1584,12 @@ async function executePublishClick(meta) {
         }, 1200);
       } else {
         clearSessionActive();
-        await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
+        sessionStorage.setItem("TP_AUTOPILOT_COMPLETED", "true");
+        await chrome.storage.local.set({
+          pendingAutoList: false,
+          advanceNextAfterFill: false,
+          triggeredByPopupTimestamp: 0
+        });
       }
     }
 

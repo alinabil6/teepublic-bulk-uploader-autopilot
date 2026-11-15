@@ -31,6 +31,7 @@ class DesignItem:
     description: str = ""
     file_path: Optional[str] = None
     is_matched: bool = False
+    has_thumbnail: bool = False
     status: str = "Pending Validation"
     validation_warning: Optional[str] = None
     raw_data: Dict[str, Any] = field(default_factory=dict)

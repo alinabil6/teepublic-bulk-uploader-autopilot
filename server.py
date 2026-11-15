@@ -219,6 +219,7 @@ class AppState:
                     "folder_path": self.folder_path,
                 },
                 "progress": self.progress,
+                "current_index": getattr(self, "current_index", 0),
                 "is_running_automation": bool(self.active_automation and self.active_automation.is_running),
                 "logs": self.logs[-100:]
             }
