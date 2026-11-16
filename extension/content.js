@@ -496,7 +496,7 @@ async function executeMasterWorkflow(advanceNext = true) {
       const fileInput = document.querySelector('input.jsBulkS3FileInput, input[type="file"]');
       const dropzone = document.querySelector('.m-uploader__upload-container, .current.jsBulkUploaderImages, #bulk_form, [data-test="dropzone"]');
       const localBlobUrls = [];
-      const totalUploadCount = designs.length > 0 ? designs.length : 1;
+      let totalUploadCount = designs.length > 0 ? designs.length : 1;
 
       // Check if designs are ALREADY uploaded on the bulk uploader (e.g. user resumed or refreshed)
       const alreadyUploaded = hasUploadedArtworks();
