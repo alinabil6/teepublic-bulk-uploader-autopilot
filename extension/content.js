@@ -487,7 +487,7 @@ async function handleAutoListTrigger(advanceNext = true) {
   const pageType = getPageType();
 
   // If on Store page, Landing, or an empty upload screen: Navigate directly to /designs/bulk_uploader!
-  if (pageType === "NAVIGATE_TO_BULK") {
+  if (pageType !== "BULK_DROPZONE" && pageType !== "DESIGN_EDIT") {
     updateTracker(1, 15, "Autopilot navigating to TeePublic Bulk Uploader...");
     showToast("📍 Navigating to TeePublic Bulk Uploader...", "info", 2000);
 
@@ -691,10 +691,16 @@ async function executeMasterWorkflow(advanceNext = true) {
         });
       }
 
+      function getUploadedArtworkCount() {
+        const images = document.querySelectorAll('.jsBulkUploaderImages img, .current img');
+        if (images.length > 0) return images.length;
+        const tiles = document.querySelectorAll('.jsBulkUploaderImages .jsBulkUploaderImage, .jsBulkUploaderImages .img_holder');
+        return tiles.length;
+      }
+
       // Verify that TeePublic has actually rendered uploaded artwork elements in DOM
       function hasUploadedArtworks() {
-        const imgs = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage, .img_holder img');
-        if (imgs.length > 0) return true;
+        if (getUploadedArtworkCount() > 0) return true;
         const dropText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message')?.textContent || '');
         if (dropText.includes('Uploads complete') || dropText.includes('Get Started')) return true;
         return false;
@@ -836,7 +842,7 @@ async function executeMasterWorkflow(advanceNext = true) {
         ensureThumbnailsVisible();
         window.scrollTo({ top: 0, behavior: 'instant' });
 
-        const uploadedCount = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage').length;
+        const uploadedCount = getUploadedArtworkCount();
         if (uploadedCount !== lastUploadedCount) {
           lastUploadedCount = uploadedCount;
           lastActivityTime = Date.now();
@@ -916,7 +922,7 @@ async function executeMasterWorkflow(advanceNext = true) {
 
         // Also check if TeePublic dropzone text says uploads are complete with NO failed uploads
         const dropzoneText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message, .jsBulkUploaderStatus')?.textContent || '');
-        if (!failedStatus.hasFailed && (dropzoneText.includes('Uploads complete') || dropzoneText.includes('Get Started'))) {
+        if (!failedStatus.hasFailed && uploadedCount >= totalUploadCount && (dropzoneText.includes('Uploads complete') || dropzoneText.includes('Get Started'))) {
           const s3Btn = document.querySelector('.jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button, .jsBulkUploaderSubmit');
           if (s3Btn) {
             detectedBtnObj = { btn: s3Btn, type: 's3' };
@@ -930,15 +936,34 @@ async function executeMasterWorkflow(advanceNext = true) {
       ensureThumbnailsVisible();
 
       if (detectedBtnObj) {
-        // Build designIdMap from the uploaded tiles
+        // Build de-duplicated designIdMap from the uploaded tiles
         const designIdMap = {};
-        const tiles = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage');
-        tiles.forEach((tile, idx) => {
+        let domTiles = Array.from(document.querySelectorAll('.jsBulkUploaderImages .jsBulkUploaderImage, .jsBulkUploaderImages .img_holder'));
+        if (domTiles.length === 0) {
+          domTiles = Array.from(document.querySelectorAll('.jsBulkUploaderImages img, .current img'));
+        }
+
+        let validIdx = 0;
+        const seenIds = new Set();
+        domTiles.forEach((tile) => {
           const dId = tile.getAttribute('data-design-id') || tile.dataset?.designId || tile.querySelector?.('[data-design-id]')?.getAttribute('data-design-id');
-          if (dId && designs[idx]) {
-            designIdMap[dId] = designs[idx].file_name;
+          if (dId && !seenIds.has(dId)) {
+            seenIds.add(dId);
+            const explicitName = tile.getAttribute('data-filename') || tile.getAttribute('title') || tile.querySelector?.('img')?.getAttribute('title') || tile.querySelector?.('img')?.getAttribute('alt');
+            let matched = null;
+            if (explicitName) {
+              matched = designs.find(d => d.file_name && d.file_name.toLowerCase() === explicitName.toLowerCase());
+            }
+            if (!matched && designs[validIdx]) {
+              matched = designs[validIdx];
+            }
+            if (matched) {
+              designIdMap[dId] = matched.file_name;
+            }
+            validIdx++;
           }
         });
+
         if (Object.keys(designIdMap).length > 0) {
           await chrome.storage.local.set({ designIdMap: designIdMap });
           console.log("[Autopilot] Stored designIdMap:", designIdMap);

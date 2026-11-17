@@ -900,6 +900,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const isTeePublic = Boolean(tab?.url && tab.url.includes("teepublic.com"));
+    const isUploaderOrEdit = Boolean(tab?.url && (tab.url.includes("bulk_uploader") || (tab.url.includes("/designs/") && tab.url.includes("/edit"))));
 
     await chrome.storage.local.set({
       batchCompleted: false,
@@ -909,7 +910,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       advanceNextAfterFill: advanceNext
     });
 
-    if (!isTeePublic) {
+    if (!isTeePublic || !isUploaderOrEdit) {
       if (tab?.id) {
         chrome.tabs.update(tab.id, { url: "https://www.teepublic.com/designs/bulk_uploader" });
       } else {
