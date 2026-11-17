@@ -130,7 +130,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const idx = message.index !== undefined ? message.index : 0;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const timeoutId = setTimeout(() => controller.abort(), 65000);
         const res = await fetch(`http://127.0.0.1:5050/api/thumbnail/${idx}`, {
           signal: controller.signal,
           cache: "no-store"
@@ -138,7 +138,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         clearTimeout(timeoutId);
 
         if (!res.ok) {
-          sendResponse({ success: false, error: `HTTP ${res.status}` });
+          sendResponse({ success: false, error: `HTTP ${res.status}: Failed to fetch thumbnail for index ${idx}` });
           return;
         }
 
@@ -152,7 +152,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           mimeType: mimeType
         });
       } catch (err) {
-        sendResponse({ success: false, error: err.message || "Failed to fetch thumbnail" });
+        const isTimeout = err.name === "AbortError";
+        const errMsg = isTimeout
+          ? `Timeout (65s) fetching thumbnail #${message.index} from local server`
+          : (err.message || "Failed to fetch thumbnail");
+        sendResponse({ success: false, error: errMsg });
       }
     })();
     return true; // Keep message channel open for async response

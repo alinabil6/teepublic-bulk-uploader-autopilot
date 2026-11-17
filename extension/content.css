@@ -964,4 +964,130 @@
   color: #FFFFFF;
 }
 
+/* ===================================================================
+   HOST ISOLATION & THEME CONTRAST RULES
+   Prevents host page styles (TeePublic) from overriding HUD text colors
+   =================================================================== */
+
+#tp-companion-hud {
+  color: #F8FAFC !important;
+}
+
+#tp-companion-hud h1,
+#tp-companion-hud h2,
+#tp-companion-hud h3,
+#tp-companion-hud h4,
+#tp-companion-hud p,
+#tp-companion-hud span,
+#tp-companion-hud div,
+#tp-companion-hud label {
+  color: inherit;
+}
+
+#tp-companion-hud .hud-brand-title {
+  color: #F8FAFC !important;
+}
+
+#tp-companion-hud .hud-design-name {
+  color: #F8FAFC !important;
+}
+
+#tp-companion-hud .hud-tracker-header {
+  color: #94A3B8 !important;
+}
+
+#tp-companion-hud .hud-tracker-status {
+  color: #E2E8F0 !important;
+}
+
+#tp-companion-hud .hud-tracker-pct {
+  color: #38BDF8 !important;
+}
+
+#tp-companion-hud .hud-footer-note,
+#tp-companion-hud .hud-footer {
+  color: #64748B !important;
+}
+
+#tp-companion-hud .hud-counter {
+  color: #94A3B8 !important;
+}
+
+#tp-companion-hud .hud-section-title {
+  color: #94A3B8 !important;
+}
+
+#tp-companion-hud .hud-scraper-info {
+  color: #94A3B8 !important;
+}
+
+/* Light Mode Overrides for Injected HUD */
+#tp-companion-hud.hud-light-mode {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border-color: rgba(0, 0, 0, 0.15) !important;
+  color: #0F172A !important;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.15), 0 0 20px rgba(56, 189, 248, 0.15) !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-header {
+  background: rgba(241, 245, 249, 0.95) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-brand-title {
+  color: #0F172A !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-design-info {
+  background: rgba(248, 250, 252, 0.9) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-design-name {
+  color: #0F172A !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-tracker-container {
+  background: rgba(241, 245, 249, 0.95) !important;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-tracker-header {
+  color: #475569 !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-tracker-status {
+  color: #1E293B !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-counter {
+  color: #64748B !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-footer-note,
+#tp-companion-hud.hud-light-mode .hud-footer {
+  color: #94A3B8 !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-scraper-bar {
+  background: rgba(241, 245, 249, 0.9) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-scraper-info {
+  color: #475569 !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-btn-mini {
+  background: #F1F5F9 !important;
+  border-color: #CBD5E1 !important;
+  color: #0F172A !important;
+}
+
+#tp-companion-hud.hud-light-mode .hud-btn-mini:hover {
+  background: #2563EB !important;
+  border-color: #38BDF8 !important;
+  color: #FFFFFF !important;
+}
+
 

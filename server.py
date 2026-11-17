@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import queue
+import copy
 import datetime
 import threading
 from typing import List, Dict, Any, Optional
@@ -87,6 +88,8 @@ class AppState:
         self.logs: List[Dict[str, str]] = []
         self.log_subscribers: List[queue.Queue] = []
         self.progress: Dict[str, int] = {"current": 0, "total": 0}
+        self.current_index: int = 0
+        self.theme: str = "dark"
         self.lock = threading.RLock()
         self.active_automation: Optional[TeePublicAutomation] = None
 
@@ -219,7 +222,8 @@ class AppState:
                     "folder_path": self.folder_path,
                 },
                 "progress": self.progress,
-                "current_index": getattr(self, "current_index", 0),
+                "current_index": max(0, min(len(designs_data) - 1, self.progress.get("current", 1) - 1)) if designs_data else 0,
+                "theme": getattr(self, "theme", "dark"),
                 "is_running_automation": bool(self.active_automation and self.active_automation.is_running),
                 "logs": self.logs[-100:]
             }
@@ -229,6 +233,8 @@ state = AppState()
 def execute_matching():
     with state.lock:
         if not state.designs:
+            state.summary = ValidationSummary()
+            state.set_progress(0, 0)
             return
 
         os.makedirs(ARTWORK_DIR, exist_ok=True)
@@ -505,11 +511,6 @@ def upload_images():
             ext = os.path.splitext(safe_base)[1].lower()
             if ext in IMAGE_EXTENSIONS:
                 dest = os.path.join(ARTWORK_DIR, safe_base)
-                # Avoid collision if file already exists
-                if os.path.exists(dest):
-                    stem, ext_part = os.path.splitext(safe_base)
-                    safe_base = f"{stem}_{int(time.time()*1000)}{ext_part}"
-                    dest = os.path.join(ARTWORK_DIR, safe_base)
                 f.save(dest)
                 saved_files.append((raw_base, os.path.abspath(dest)))
 
@@ -684,6 +685,17 @@ def update_design_field():
 
         return jsonify({"success": True})
 
+@app.route("/api/theme", methods=["GET", "POST"])
+def sync_theme():
+    if request.method == "POST":
+        data = request.json or {}
+        theme = data.get("theme", "dark")
+        with state.lock:
+            state.theme = theme
+        return jsonify({"success": True, "theme": theme})
+    with state.lock:
+        return jsonify({"theme": getattr(state, "theme", "dark")})
+
 @app.route("/api/copy-settings-all", methods=["POST"])
 def copy_settings_all():
     data = request.json or {}
@@ -696,15 +708,7 @@ def copy_settings_all():
 
         for i in range(len(state.designs)):
             if i != index:
-                if i not in state.design_settings:
-                    state.design_settings[i] = {}
-                for k, v in src.items():
-                    if isinstance(v, dict):
-                        state.design_settings[i][k] = dict(v)
-                    elif isinstance(v, list):
-                        state.design_settings[i][k] = list(v)
-                    else:
-                        state.design_settings[i][k] = v
+                state.design_settings[i] = copy.deepcopy(src)
 
         state.add_log("SUCCESS", f"Settings from Design #{index + 1} copied to all {len(state.designs)} designs.")
         res = state.to_dict()

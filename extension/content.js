@@ -67,35 +67,44 @@ async function apiGetStudioState() {
   });
 }
 
-// Proxied thumbnail blob fetcher via background script
+// Proxied thumbnail blob fetcher via background script with 3x retry
 async function apiGetThumbnailBlob(index) {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendMessage({ action: "FETCH_LOCAL_THUMBNAIL", index: index }, async (response) => {
-        if (!chrome.runtime.lastError && response && response.success && response.base64) {
+  const delays = [500, 1200, 2500];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const blob = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: "FETCH_LOCAL_THUMBNAIL", index: index }, async (response) => {
+          if (!chrome.runtime.lastError && response && response.success && response.base64) {
+            try {
+              const b = base64ToBlob(response.base64, response.mimeType || "image/png");
+              resolve(b);
+              return;
+            } catch (e) {
+              console.warn("[Autopilot] base64 decode error:", e);
+            }
+          }
+          // Direct fallback
           try {
-            const blob = base64ToBlob(response.base64, response.mimeType || "image/png");
-            resolve(blob);
-            return;
-          } catch (e) {
-            console.warn("[Autopilot] base64 decode error:", e);
-          }
-        }
-        // Direct fallback
-        try {
-          const direct = await fetch(`http://127.0.0.1:5050/api/thumbnail/${index}`);
-          if (direct.ok) {
-            const blob = await direct.blob();
-            resolve(blob);
-            return;
-          }
-        } catch (_) {}
+            const direct = await fetch(`http://127.0.0.1:5050/api/thumbnail/${index}`);
+            if (direct.ok) {
+              const b = await direct.blob();
+              resolve(b);
+              return;
+            }
+          } catch (_) {}
+          resolve(null);
+        });
+      } catch (_) {
         resolve(null);
-      });
-    } catch (_) {
-      resolve(null);
+      }
+    });
+
+    if (blob) return blob;
+    if (attempt < 2) {
+      await sleep(delays[attempt]);
     }
-  });
+  }
+  return null;
 }
 
 // Suppress blocking page alerts (e.g. TeePublic premature upload warnings) & surface errors
@@ -130,6 +139,66 @@ window.addEventListener("MF_TEEPUBLIC_ALERT", (e) => {
   }
 });
 
+function applyHUDTheme(theme) {
+  const hud = document.getElementById("tp-companion-hud");
+  if (!hud) return;
+  if (theme === "light") {
+    hud.classList.add("hud-light-mode");
+  } else {
+    hud.classList.remove("hud-light-mode");
+  }
+}
+
+function detectFailedUploads() {
+  const pageText = (document.body ? document.body.innerText : "");
+  const failedMatches = [];
+
+  const regex = /([A-Za-z0-9_\-\.\(\)\s]+\.png):\s*upload failed/gi;
+  let m;
+  while ((m = regex.exec(pageText)) !== null) {
+    const rawName = m[1].trim();
+    if (!failedMatches.some(fn => fn.toLowerCase() === rawName.toLowerCase())) {
+      failedMatches.push(rawName);
+    }
+  }
+
+  const errorEls = document.querySelectorAll(
+    '.m-uploader__error, .jsBulkUploadError, .error-message, .upload-error, .m-uploader__file-error, [class*="upload-failed"], [class*="upload_failed"]'
+  );
+  errorEls.forEach(el => {
+    const txt = (el.textContent || "").trim();
+    const match = txt.match(/([A-Za-z0-9_\-\.\(\)\s]+\.png)/i);
+    if (match && !failedMatches.some(fn => fn.toLowerCase() === match[1].trim().toLowerCase())) {
+      failedMatches.push(match[1].trim());
+    }
+  });
+
+  const hasFailedText = pageText.toUpperCase().includes("SOME UPLOADS FAILED") || pageText.toUpperCase().includes("UPLOAD FAILED");
+
+  return {
+    hasFailed: hasFailedText || failedMatches.length > 0,
+    failedFiles: failedMatches
+  };
+}
+
+function getDomOriginalFileName() {
+  const hiddenInp = document.querySelector(
+    'input[name*="original_filename"], input[name*="file_name"], [data-original-filename], [data-filename]'
+  );
+  if (hiddenInp) {
+    const val = hiddenInp.value || hiddenInp.getAttribute('data-original-filename') || hiddenInp.getAttribute('data-filename');
+    if (val && val.trim().length > 0) return val.trim();
+  }
+
+  const previewImg = document.querySelector('#uploader-preview-image, .design-img, .jsDesignMockup, img[src*="artwork"]');
+  if (previewImg) {
+    const title = previewImg.getAttribute('title') || previewImg.getAttribute('alt');
+    if (title && title.includes('.png')) return title.trim();
+  }
+
+  return null;
+}
+
 // Helper functions to manage tab-isolated autopilot session lifecycle
 function markSessionActive() {
   sessionStorage.removeItem("TP_AUTOPILOT_COMPLETED");
@@ -163,6 +232,8 @@ function clearSessionActive() {
     pendingAutoList: false,
     triggeredByPopupTimestamp: 0,
     advanceNextAfterFill: false,
+    batchCompleted: false,
+    designIdMap: {},
     trackerState: null
   });
 
@@ -175,19 +246,41 @@ function clearSessionActive() {
     attachKeyboardShortcuts();
   }
 
+  // Sync HUD theme with local studio state
+  try {
+    const studioState = await apiGetStudioState();
+    if (studioState && studioState.theme) {
+      applyHUDTheme(studioState.theme);
+    }
+  } catch (_) {}
+
   const pageType = getPageType();
 
   // If on a completed, store, profile, or catalog page: Autopilot batch has finished!
   // Unconditionally terminate any session and never redirect back to bulk uploader.
   if (pageType === "COMPLETED_OR_EXTERNAL") {
     clearSessionActive();
-    await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false, triggeredByPopupTimestamp: 0 });
+    await chrome.storage.local.set({
+      batchCompleted: true,
+      pendingAutoList: false,
+      advanceNextAfterFill: false,
+      triggeredByPopupTimestamp: 0
+    });
+    return;
+  }
+
+  const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 25000));
+
+  // Kill-switch: If batch was already published and completed, never restart on page refresh/redirect!
+  if (store.batchCompleted === true && !isRecentPopupNav) {
+    clearSessionActive();
+    await chrome.storage.local.set({ pendingAutoList: false, advanceNextAfterFill: false });
     return;
   }
 
   // Check if this browser tab is currently running an active, user-authorized Autopilot session
   const isSessionActive = sessionStorage.getItem("TP_AUTOPILOT_SESSION_ACTIVE") === "true";
-  const isBatchCompleted = sessionStorage.getItem("TP_AUTOPILOT_COMPLETED") === "true";
+  const isBatchCompleted = store.batchCompleted === true || sessionStorage.getItem("TP_AUTOPILOT_COMPLETED") === "true";
   const sessionTime = parseInt(
     sessionStorage.getItem("TP_AUTOPILOT_SESSION_TIME") || 
     sessionStorage.getItem("TP_PIPELINE_CONTINUING") || 
@@ -196,7 +289,6 @@ function clearSessionActive() {
   );
   // Session remains valid if active within the last 10 minutes (prevents stall on slow Tor/assets load)
   const isSessionFresh = (isSessionActive || sessionTime > 0) && (Date.now() - sessionTime < 600000);
-  const isRecentPopupNav = Boolean(store.triggeredByPopupTimestamp && (Date.now() - store.triggeredByPopupTimestamp < 25000));
 
   const shouldAutoContinue = isEnabled && !isBatchCompleted && (store.pendingAutoList || isSessionActive) && (isSessionFresh || isRecentPopupNav);
 
@@ -360,7 +452,9 @@ function getPageType() {
     path.includes("/my_account") || 
     path.includes("/dashboard") ||
     path.includes("/stores/") ||
-    path.includes("/settings")
+    path.includes("/settings") ||
+    path.includes("/my_designs") ||
+    path.includes("/success")
   ) {
     return "COMPLETED_OR_EXTERNAL";
   }
@@ -607,9 +701,14 @@ async function executeMasterWorkflow(advanceNext = true) {
       }
 
       // Easily & reliably recognize whichever Get Started button is genuinely visible
-      // HARD REQUIREMENT: Never return any button if zero images have completed uploading!
+      // HARD REQUIREMENT: Never return any button if zero images have completed uploading or if uploads failed!
       function findVisibleGetStartedButton() {
         if (!hasUploadedArtworks()) {
+          return null;
+        }
+
+        const failedStatus = detectFailedUploads();
+        if (failedStatus.hasFailed) {
           return null;
         }
 
@@ -727,6 +826,10 @@ async function executeMasterWorkflow(advanceNext = true) {
       showToast(`⏳ Watching for TeePublic upload completion...`, "info", 3000);
 
       let detectedBtnObj = null;
+      let retryRounds = 0;
+      const MAX_RETRY_ROUNDS = 3;
+      let lastActivityTime = Date.now();
+      let lastUploadedCount = 0;
 
       // Generous 10-minute timeout (1200 * 500ms = 600s) for slow Tor relays & large batches
       for (let attempt = 0; attempt < 1200; attempt++) {
@@ -734,25 +837,86 @@ async function executeMasterWorkflow(advanceNext = true) {
         window.scrollTo({ top: 0, behavior: 'instant' });
 
         const uploadedCount = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage').length;
+        if (uploadedCount !== lastUploadedCount) {
+          lastUploadedCount = uploadedCount;
+          lastActivityTime = Date.now();
+        }
+
         if (uploadedCount > 0) {
           const pct = Math.min(58, 35 + Math.round((uploadedCount / totalUploadCount) * 23));
           updateTracker(3, pct, `TeePublic uploaded ${uploadedCount}/${totalUploadCount} design(s)...`);
         }
 
-        detectedBtnObj = findVisibleGetStartedButton();
-        if (detectedBtnObj) {
-          break;
-        }
+        const failedStatus = detectFailedUploads();
 
-        // Also check if TeePublic dropzone text says uploads are complete or failed
-        const dropzoneText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message, .jsBulkUploaderStatus')?.textContent || '');
-        if (dropzoneText.includes('DAILY LIMIT') || dropzoneText.includes('Some uploads failed')) {
-          if (!window.__tpDailyLimitWarned) {
-            window.__tpDailyLimitWarned = true;
-            showToast("⚠️ TeePublic daily quota or partial upload detected. Proceeding with uploaded designs...", "warning", 5000);
+        if (failedStatus.hasFailed) {
+          if (retryRounds < MAX_RETRY_ROUNDS) {
+            retryRounds++;
+            const failedNames = failedStatus.failedFiles;
+            showToast(`⚠️ Detected ${failedNames.length || "partial"} failed upload(s). Auto-retrying failed files (round ${retryRounds}/${MAX_RETRY_ROUNDS})...`, "warning", 4500);
+            updateTracker(3, 40, `Retrying ${failedNames.length || "failed"} file(s) (round ${retryRounds}/${MAX_RETRY_ROUNDS})...`);
+
+            const dtRetry = new DataTransfer();
+            for (let i = 0; i < totalUploadCount; i++) {
+              const d = designs[i] || {};
+              const fn = d.file_name || "";
+              const shouldRetry = failedNames.length === 0 || failedNames.some(ff => ff.toLowerCase() === fn.toLowerCase());
+              if (shouldRetry) {
+                try {
+                  const blob = await apiGetThumbnailBlob(i);
+                  if (blob) {
+                    const file = new File([blob], fn || `design_${i + 1}.png`, { type: blob.type || "image/png" });
+                    dtRetry.items.add(file);
+                  }
+                } catch (e) {
+                  console.warn(`[Autopilot] Blob retry error for index ${i}:`, e);
+                }
+              }
+            }
+
+            if (dtRetry.items.length > 0 && fileInput) {
+              fileInput.files = dtRetry.files;
+              fileInput.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+              fileInput.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+              if (dropzone) {
+                dropzone.dispatchEvent(new DragEvent("drop", { dataTransfer: dtRetry, bubbles: true, composed: true }));
+              }
+              try {
+                const dismissScript = document.createElement("script");
+                dismissScript.textContent = `
+                  (function() {
+                    try {
+                      if (window.jQuery) {
+                        window.jQuery('.m-uploader__error, .jsBulkUploadError, .error-message').hide();
+                      }
+                    } catch (_) {}
+                  })();
+                `;
+                (document.head || document.documentElement).appendChild(dismissScript);
+                dismissScript.remove();
+              } catch (_) {}
+
+              await sleep(3000);
+              lastActivityTime = Date.now();
+              continue;
+            }
+          } else {
+            if (!window.__tpFailedExhaustedWarned) {
+              window.__tpFailedExhaustedWarned = true;
+              showToast("⚠️ S3 upload failed on some designs after 3 retry rounds. Please inspect TeePublic uploader.", "warning", 8000);
+              updateTracker(3, 50, "Paused: S3 upload failed on some designs. Please inspect.");
+            }
+          }
+        } else if (uploadedCount >= totalUploadCount) {
+          detectedBtnObj = findVisibleGetStartedButton();
+          if (detectedBtnObj) {
+            break;
           }
         }
-        if (dropzoneText.includes('Uploads complete') || dropzoneText.includes('Get Started')) {
+
+        // Also check if TeePublic dropzone text says uploads are complete with NO failed uploads
+        const dropzoneText = (document.querySelector('.jsBulkUploaderDropzone, .m-uploader__dropzone-message, .jsBulkUploaderStatus')?.textContent || '');
+        if (!failedStatus.hasFailed && (dropzoneText.includes('Uploads complete') || dropzoneText.includes('Get Started'))) {
           const s3Btn = document.querySelector('.jsS3BulkUploaderSubmit, .m-bulk-uploader__submit-button, .jsBulkUploaderSubmit');
           if (s3Btn) {
             detectedBtnObj = { btn: s3Btn, type: 's3' };
@@ -766,6 +930,20 @@ async function executeMasterWorkflow(advanceNext = true) {
       ensureThumbnailsVisible();
 
       if (detectedBtnObj) {
+        // Build designIdMap from the uploaded tiles
+        const designIdMap = {};
+        const tiles = document.querySelectorAll('.jsBulkUploaderImages img, .current img, .jsBulkUploaderImage');
+        tiles.forEach((tile, idx) => {
+          const dId = tile.getAttribute('data-design-id') || tile.dataset?.designId || tile.querySelector?.('[data-design-id]')?.getAttribute('data-design-id');
+          if (dId && designs[idx]) {
+            designIdMap[dId] = designs[idx].file_name;
+          }
+        });
+        if (Object.keys(designIdMap).length > 0) {
+          await chrome.storage.local.set({ designIdMap: designIdMap });
+          console.log("[Autopilot] Stored designIdMap:", designIdMap);
+        }
+
         updateTracker(3, 60, "Get Started detected! Force clicking automatically...");
         showToast("🚀 'Get Started' detected! Force clicking automatically...", "info", 2000);
 
@@ -852,14 +1030,55 @@ async function executeMasterWorkflow(advanceNext = true) {
       isLastDesign = (curIdx >= totalCount - 1);
     }
 
-    // Refresh design object for this exact index!
-    design = (designs && designs[curIdx]) ? designs[curIdx] : ((designs && designs[0]) ? designs[0] : null);
+    // Deterministic Matching: URL Design ID -> designIdMap -> DOM Original Filename -> Index Fallback
+    const urlMatch = window.location.pathname.match(/\/designs\/(\d+)\/edit/);
+    const currentDesignId = urlMatch ? urlMatch[1] : null;
+
+    let matchedDesign = null;
+    let matchSource = "index_fallback";
+
+    const { designIdMap = {} } = await chrome.storage.local.get("designIdMap");
+    if (currentDesignId && designIdMap[currentDesignId]) {
+      const mappedFileName = designIdMap[currentDesignId];
+      const found = designs.find(d => d.file_name && d.file_name.toLowerCase() === mappedFileName.toLowerCase());
+      if (found) {
+        matchedDesign = found;
+        curIdx = designs.indexOf(found);
+        matchSource = "design_id_map";
+      }
+    }
+
+    if (!matchedDesign) {
+      const domFileName = getDomOriginalFileName();
+      if (domFileName) {
+        const found = designs.find(d => d.file_name && d.file_name.toLowerCase() === domFileName.toLowerCase());
+        if (found) {
+          matchedDesign = found;
+          curIdx = designs.indexOf(found);
+          matchSource = "dom_filename";
+        }
+      }
+    }
+
+    if (!matchedDesign) {
+      if (bulkProgress && bulkProgress.currentIndex < designs.length) {
+        curIdx = bulkProgress.currentIndex;
+        matchedDesign = designs[curIdx];
+        matchSource = "bulk_progress_index";
+      } else {
+        matchedDesign = (designs && designs[curIdx]) ? designs[curIdx] : ((designs && designs[0]) ? designs[0] : null);
+      }
+    }
+
+    design = matchedDesign;
 
     if (!design) {
-      showToast(`⚠️ No design found in queue at index #${curIdx + 1}!`, "warning", 4000);
+      showToast(`⚠️ No design found in queue for current slot #${curIdx + 1}!`, "warning", 4000);
       isListingInProgress = false;
       return;
     }
+
+    console.log(`[Autopilot Verified Match]: Slot #${curIdx + 1} (${matchSource}) -> "${design.title || design.file_name}"`);
 
     // Keep session active for the next design in the pipeline
     markSessionActive();
@@ -1549,7 +1768,7 @@ function showPublishNoticeModal(meta) {
 }
 
 async function executePublishClick(meta) {
-  const publishBtn = findPublishButton();
+  const publishBtn = findPublishButton(meta.isLastDesign);
 
   if (publishBtn) {
     publishBtn.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1569,10 +1788,13 @@ async function executePublishClick(meta) {
         clearSessionActive();
         sessionStorage.setItem("TP_AUTOPILOT_COMPLETED", "true");
         await chrome.storage.local.set({
+          batchCompleted: true,
           pendingAutoList: false,
           advanceNextAfterFill: false,
-          triggeredByPopupTimestamp: 0
+          triggeredByPopupTimestamp: 0,
+          activeDesignIndex: 0
         });
+        await sleep(350);
       }
     } else {
       if (meta.advanceNext && meta.curIdx < meta.totalCount - 1) {
@@ -1586,10 +1808,13 @@ async function executePublishClick(meta) {
         clearSessionActive();
         sessionStorage.setItem("TP_AUTOPILOT_COMPLETED", "true");
         await chrome.storage.local.set({
+          batchCompleted: true,
           pendingAutoList: false,
           advanceNextAfterFill: false,
-          triggeredByPopupTimestamp: 0
+          triggeredByPopupTimestamp: 0,
+          activeDesignIndex: 0
         });
+        await sleep(350);
       }
     }
 
@@ -2067,7 +2292,32 @@ function getBulkEditorProgress() {
   return null;
 }
 
-function findPublishButton() {
+function findPublishButton(isLastDesign = false) {
+  if (isLastDesign) {
+    // When on the final design of the batch, NEVER click Next or Save & Next!
+    // Explicitly target Publish All, Publish, or Save & Publish Later.
+    const bulkSubmit = document.querySelector(
+      'input[type="submit"][value*="Publish All"], button[value*="Publish All"], ' +
+      'input.save-publish-later-button[value*="Publish All"], ' +
+      'input[type="submit"][value*="Publish"], button[value*="Publish"], ' +
+      '.save-publish-later-button.btn--green, button.publish-and-promote-button, ' +
+      'input.save-publish-later-button, button.save-publish-later-button'
+    );
+    if (bulkSubmit) return bulkSubmit;
+
+    const greenBtn = document.querySelector('.save-publish-later-button.btn--green, input[type="submit"].btn--green, button.btn--green');
+    if (greenBtn) return greenBtn;
+
+    const formSubmit = document.querySelector(
+      'form.edit_design input[type="submit"]:not([value*="Next"]), ' +
+      'form#edit_design input[type="submit"]:not([value*="Next"]), ' +
+      'form[action*="/designs/"] input[type="submit"]:not([value*="Next"])'
+    );
+    if (formSubmit) return formSubmit;
+
+    return null;
+  }
+
   // 1. Bulk uploader explicit submit buttons
   const bulkNext = document.querySelector('input[type="submit"][value*="Next"], button[value*="Next"], input.btn--next, .btn-next-design');
   if (bulkNext) return bulkNext;

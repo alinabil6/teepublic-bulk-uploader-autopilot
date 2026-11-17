@@ -1,5 +1,6 @@
 /* Popup Styling for TeePublic Bulk Uploader Companion */
 :root {
+  color-scheme: dark;
   --bg-primary: #0F121C;
   --bg-secondary: #171B2B;
   --bg-tertiary: #20263C;
@@ -21,6 +22,11 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+button, input, select, textarea, .btn {
+  color: var(--text-primary);
+  font-family: inherit;
 }
 
 body {
@@ -457,6 +463,11 @@ input:checked + .slider:before {
 
 .pref-select:focus {
   border-color: var(--accent-blue);
+}
+
+.pref-select option {
+  background-color: #171B2B;
+  color: #F8FAFC;
 }
 
 /* Footer */

@@ -193,6 +193,13 @@ function setupMagicFabricaTheme() {
   const applyTheme = (theme) => {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("mf_theme", theme); } catch (e) {}
+    try {
+      fetch("/api/theme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theme })
+      }).catch(() => {});
+    } catch (_) {}
     if (darkIcon && lightIcon) {
       if (theme === "light") {
         darkIcon.style.display = "none";
@@ -1291,14 +1298,20 @@ function selectDesign(idx) {
   const design = state.designs[idx];
 
   // Highlight selected cards in sidebars
-  document.querySelectorAll(".queue-card").forEach((c) => {
+  document.querySelectorAll(".queue-card, .sidebar-item-card").forEach((c) => {
     if (parseInt(c.dataset.index, 10) === idx) {
-      c.classList.add("selected");
+      c.classList.add("selected", "active");
       c.scrollIntoView({ block: "nearest", behavior: "smooth" });
     } else {
-      c.classList.remove("selected");
+      c.classList.remove("selected", "active");
     }
   });
+
+  // Reset/align the right editor scroll cleanly
+  const editorCard = document.querySelector(".design-editor-card");
+  if (editorCard) {
+    editorCard.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   // Highlight active dot
   document.querySelectorAll(".page-dot").forEach((dot, dIdx) => {

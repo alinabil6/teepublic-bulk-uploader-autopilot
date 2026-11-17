@@ -902,6 +902,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const isTeePublic = Boolean(tab?.url && tab.url.includes("teepublic.com"));
 
     await chrome.storage.local.set({
+      batchCompleted: false,
+      designIdMap: {},
       pendingAutoList: true,
       triggeredByPopupTimestamp: Date.now(),
       advanceNextAfterFill: advanceNext
