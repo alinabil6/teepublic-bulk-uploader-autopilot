@@ -2516,27 +2516,32 @@ function escapeHtml(text) {
 function isProductPage() {
   const path = window.location.pathname.toLowerCase();
   const productSlugs = [
-    "/t-shirt/", "/t-shirts/", "/hoodie/", "/hoodies/", "/tank-top/",
-    "/crewneck-sweatshirt/", "/long-sleeve-t-shirt/", "/baseball-t-shirt/",
-    "/kids-t-shirt/", "/baby-onesie/", "/sticker/", "/stickers/",
-    "/phone-case/", "/phone-cases/", "/laptop-case/", "/mug/", "/mugs/",
-    "/wall-art/", "/pillow/", "/pillows/", "/tote-bag/", "/tote-bags/",
-    "/tapestry/", "/tapestries/", "/pin/", "/pins/", "/mask/", "/masks/",
-    "/magnets/", "/magnet/", "/prints/", "/print/"
+    "/t-shirt", "/t-shirts", "/hoodie", "/hoodies", "/tank-top",
+    "/crewneck-sweatshirt", "/long-sleeve-t-shirt", "/baseball-t-shirt",
+    "/kids-t-shirt", "/baby-onesie", "/sticker", "/stickers",
+    "/phone-case", "/phone-cases", "/laptop-case", "/mug", "/mugs",
+    "/wall-art", "/pillow", "/pillows", "/tote-bag", "/tote-bags",
+    "/tapestry", "/tapestries", "/pin", "/pins", "/mask", "/masks",
+    "/magnets", "/magnet", "/prints", "/print", "/designs/", "/design/"
   ];
 
   for (const slug of productSlugs) {
     if (path.includes(slug)) return true;
   }
 
+  // Regex check for numeric product ID in path (e.g. /t-shirt/61200864-christmas-movie)
+  if (/\/[a-z0-9\-]+\/\d{5,12}/i.test(path)) {
+    return true;
+  }
+
   // Check characteristic DOM elements
-  if (document.querySelector('h1.product-title, h1[itemprop="name"], .product-details h1, .m-product-title')) {
+  if (document.querySelector('h1.product-title, h1[itemprop="name"], .product-details h1, .m-product-title, #design-image, .product-photos, [data-test="product-photos"]')) {
     return true;
   }
 
   // Check for "Artist's Applied Tags" heading
   const allHeaders = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, strong, b'));
-  const hasAppliedTags = allHeaders.some(el => (el.textContent || '').toLowerCase().includes("artist's applied tags"));
+  const hasAppliedTags = allHeaders.some(el => (el.textContent || '').toLowerCase().includes("applied tags"));
   if (hasAppliedTags) return true;
 
   return false;
@@ -2545,6 +2550,42 @@ function isProductPage() {
 function cleanScrapedText(str) {
   if (!str) return "";
   return str.replace(/\s+/g, " ").trim();
+}
+
+function extractTeePublicDesignId(url = window.location.href, doc = document) {
+  if (!url) url = window.location.href;
+  const m1 = url.match(/\/(?:[a-z0-9\-]+)\/(\d{5,12})(?:-[a-z0-9\-]+)?/i);
+  if (m1 && m1[1]) return m1[1];
+  const m2 = url.match(/\/designs\/(\d{5,12})/i);
+  if (m2 && m2[1]) return m2[1];
+  const m3 = url.match(/design_id=(\d{5,12})/i);
+  if (m3 && m3[1]) return m3[1];
+
+  if (doc) {
+    const canonical = doc.querySelector('link[rel="canonical"]');
+    if (canonical && canonical.href) {
+      const cm = canonical.href.match(/\/(?:[a-z0-9\-]+)\/(\d{5,12})/i);
+      if (cm && cm[1]) return cm[1];
+    }
+    const designInput = doc.querySelector('input[name="design_id"], input#design_id, [data-design-id]');
+    if (designInput) {
+      const val = designInput.value || designInput.getAttribute('data-design-id');
+      if (val && /^\d+$/.test(val.trim())) return val.trim();
+    }
+  }
+  return null;
+}
+
+function extractCanonicalDesignKey(url = window.location.href, doc = document) {
+  const dId = extractTeePublicDesignId(url, doc);
+  if (dId) return `tp_${dId}`;
+
+  try {
+    const u = new URL(url);
+    return (u.origin + u.pathname).replace(/\/+$/, "").toLowerCase();
+  } catch (_) {
+    return url.split("?")[0].split("#")[0].replace(/\/+$/, "").toLowerCase();
+  }
 }
 
 // ===================================================================
@@ -2600,10 +2641,12 @@ function extractArtistAppliedTagsStrictly(doc = document) {
 
   for (const el of allHeaders) {
     const rawTxt = el.textContent || '';
-    if (rawTxt.length > 60) continue; // Must be a concise header/label, not a big block
+    if (rawTxt.length > 70) continue; // Must be a concise header/label, not a big block
     const norm = normalizeHeaderProbe(rawTxt);
     if (norm === "artist's applied tags" || norm === "artist applied tags" ||
-        norm.startsWith("artist's applied tags") || norm.startsWith("artist applied tags")) {
+        norm.startsWith("artist's applied tags") || norm.startsWith("artist applied tags") ||
+        norm === "artist tags" || norm === "artist's tags" || norm === "applied tags" ||
+        norm === "design tags") {
       appliedHeader = el;
       break;
     }
@@ -2613,10 +2656,10 @@ function extractArtistAppliedTagsStrictly(doc = document) {
   if (!appliedHeader) {
     for (const el of allHeaders) {
       const rawTxt = el.textContent || '';
-      if (rawTxt.length > 70) continue;
+      if (rawTxt.length > 80) continue;
       const norm = normalizeHeaderProbe(rawTxt);
-      if (norm.includes("artist's applied tags") || norm.includes("artist applied tags")) {
-        if (el.children.length <= 2) {
+      if (norm.includes("applied tags") || norm.includes("artist's tags") || norm.includes("artist tags")) {
+        if (el.children.length <= 3) {
           appliedHeader = el;
           break;
         }
@@ -2666,14 +2709,17 @@ function extractArtistAppliedTagsStrictly(doc = document) {
 
   // Direct CSS fallback if DOM hierarchy varies
   if (!tagsContainer) {
-    tagsContainer = doc.querySelector('.m-design-tags__list, [data-test="artist-applied-tags"], .artist-tags-list, .applied-tags-list');
+    tagsContainer = doc.querySelector(
+      '.m-design-tags__list, [data-test="artist-applied-tags"], [data-test*="applied-tags"], ' +
+      '.artist-tags-list, .applied-tags-list, .design-tags__list, .design-tags, .m-design-tags'
+    );
   }
 
   // 3. Extract pills ONLY from this single container
   if (tagsContainer) {
     const pills = tagsContainer.querySelectorAll('a, button, [data-tag], .tag, .pill, li');
     for (const p of pills) {
-      // Exclude muted / inactive / disabled elements (e.g., greyed out variant chips like Image 2 "christmas puns 1")
+      // Exclude muted / inactive / disabled elements (e.g., greyed out variant chips like "christmas puns 1")
       if (p.classList?.contains("disabled") ||
           p.classList?.contains("inactive") ||
           p.classList?.contains("muted") ||
@@ -2719,9 +2765,14 @@ function extractArtistAppliedTagsStrictly(doc = document) {
 }
 
 function scrapeTeePublicProductPage() {
+  const designId = extractTeePublicDesignId(window.location.href, document);
+  const canonicalKey = extractCanonicalDesignKey(window.location.href, document);
+
   const result = {
-    id: "scraped_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6),
-    url: window.location.href,
+    id: designId ? `tp_${designId}` : ("scraped_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6)),
+    designId: designId || "",
+    canonicalKey: canonicalKey,
+    url: window.location.href.split('#')[0],
     title: "",
     store: "",
     mainTag: "",
@@ -2799,7 +2850,16 @@ function scrapeTeePublicProductPage() {
 
 function mountQuickGrabLauncher(store) {
   if (document.getElementById("tp-quick-grab-launcher")) return;
-  if (!isProductPage()) return;
+  if (!isProductPage()) {
+    if (document.readyState !== "complete") {
+      window.addEventListener("load", () => {
+        if (!document.getElementById("tp-quick-grab-launcher") && isProductPage()) {
+          mountQuickGrabLauncher(store);
+        }
+      }, { once: true });
+    }
+    return;
+  }
 
   const currentList = store.scrapedCompetitorDesigns || [];
   const isEnabled = store.scraperEnabled !== false;
@@ -2838,57 +2898,48 @@ async function handleQuickGrabTrigger() {
     return;
   }
 
-  const currentList = store.scrapedCompetitorDesigns || [];
   const storeName = (scraped.store || "Independent Store").trim();
 
-  const existingIdx = currentList.findIndex(
-    x => (x.url && scraped.url && x.url === scraped.url) ||
-         (x.title && scraped.title && x.title.toLowerCase() === scraped.title.toLowerCase())
-  );
+  // Route through atomic background queue to eliminate multi-tab race conditions & accidental title overwrites
+  try {
+    chrome.runtime.sendMessage({
+      action: "SAVE_SCRAPED_DESIGN",
+      data: scraped
+    }, (resp) => {
+      const isUpdate = Boolean(resp?.isUpdate);
+      const totalCount = resp?.totalCount || (store.scrapedCompetitorDesigns || []).length + 1;
+      const itemNum = resp?.itemNum || totalCount;
 
-  let updatedList = [...currentList];
-  let isUpdate = false;
-  let itemNum = updatedList.length + 1;
+      // Visual button feedback
+      const grabBtn = document.getElementById("tp-quick-grab-launcher");
+      if (grabBtn) {
+        grabBtn.classList.add("grab-success");
+        const label = grabBtn.querySelector(".grab-label");
+        const badge = grabBtn.querySelector(".grab-badge");
+        if (label) label.textContent = isUpdate ? `✓ Updated! (${totalCount})` : `✓ Saved! (${totalCount})`;
+        if (badge) badge.textContent = totalCount;
 
-  if (existingIdx >= 0) {
-    updatedList[existingIdx] = { ...updatedList[existingIdx], ...scraped };
-    isUpdate = true;
-    itemNum = existingIdx + 1;
-  } else {
-    updatedList.push(scraped);
+        setTimeout(() => {
+          grabBtn.classList.remove("grab-success");
+          if (label) label.textContent = "Grab Tags";
+        }, 2000);
+      }
+
+      // Update in-HUD badge
+      const hudBadge = document.getElementById("hudScrapedCount");
+      if (hudBadge) hudBadge.textContent = totalCount;
+
+      // Show Toast
+      const storeBadge = storeName ? ` • ${storeName}` : "";
+      const toastMsg = isUpdate
+        ? `✓ Updated #${itemNum}: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge})`
+        : `✓ Saved #${itemNum}: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge}) • Total: ${totalCount}`;
+      showToast(toastMsg, "success", 3000);
+    });
+  } catch (err) {
+    console.error("[Quick Grab Error]:", err);
+    showToast("⚠️ Could not save listing tags. Please retry.", "warning", 2500);
   }
-
-  await chrome.storage.local.set({ scrapedCompetitorDesigns: updatedList });
-
-  const currentStoreTotal = updatedList.filter(item =>
-    (item.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
-  ).length;
-
-  // Visual button feedback
-  const grabBtn = document.getElementById("tp-quick-grab-launcher");
-  if (grabBtn) {
-    grabBtn.classList.add("grab-success");
-    const label = grabBtn.querySelector(".grab-label");
-    const badge = grabBtn.querySelector(".grab-badge");
-    if (label) label.textContent = isUpdate ? `✓ Updated! (${updatedList.length})` : `✓ Saved! (${updatedList.length})`;
-    if (badge) badge.textContent = updatedList.length;
-
-    setTimeout(() => {
-      grabBtn.classList.remove("grab-success");
-      if (label) label.textContent = "Grab Tags";
-    }, 2000);
-  }
-
-  // Update in-HUD badge
-  const hudBadge = document.getElementById("hudScrapedCount");
-  if (hudBadge) hudBadge.textContent = updatedList.length;
-
-  // Show Toast
-  const storeBadge = storeName ? ` • ${storeName} (${currentStoreTotal} designs)` : "";
-  const toastMsg = isUpdate
-    ? `✓ Updated #${itemNum}: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge})`
-    : `✓ #${itemNum} Collected: "${scraped.title}" (${scraped.tags.length} artist tags${storeBadge}) • Total: ${updatedList.length}`;
-  showToast(toastMsg, "success", 3000);
 }
 
 function downloadMagicListingCsvDirect(designs) {

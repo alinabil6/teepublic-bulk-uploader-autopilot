@@ -289,42 +289,28 @@ document.addEventListener("DOMContentLoaded", async () => {
       btnScrapeActiveTab.innerHTML = `<span class="btn-icon">⚡</span> Extracting Tags...`;
 
       try {
-        chrome.tabs.sendMessage(tab.id, { action: "SCRAPE_CURRENT_PAGE" }, async (resp) => {
+        chrome.tabs.sendMessage(tab.id, { action: "SCRAPE_CURRENT_PAGE" }, (resp) => {
           if (!chrome.runtime.lastError && resp && resp.success && resp.data) {
             const item = resp.data;
-            const currentList = store.scrapedCompetitorDesigns || [];
-            const storeName = (item.store || "Independent Store").trim();
 
-            // Check if already captured in this batch (by URL or title)
-            const existingIdx = currentList.findIndex(x =>
-              (x.url && item.url && x.url === item.url) ||
-              (x.title && item.title && x.title.toLowerCase() === item.title.toLowerCase())
-            );
+            // Save atomically via background worker queue (strictly by design ID / URL, never by title)
+            chrome.runtime.sendMessage({ action: "SAVE_SCRAPED_DESIGN", data: item }, async (saveResp) => {
+              const updatedList = (await chrome.storage.local.get({ scrapedCompetitorDesigns: [] })).scrapedCompetitorDesigns || [];
 
-            let updatedList = [...currentList];
-            if (existingIdx >= 0) {
-              updatedList[existingIdx] = { ...updatedList[existingIdx], ...item };
-            } else {
-              updatedList.push(item);
-            }
+              // Visual feedback
+              btnScrapeActiveTab.classList.add("grabbed-flash");
+              const isUpd = Boolean(saveResp?.isUpdate);
+              const count = saveResp?.totalCount || updatedList.length;
+              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">✓</span> ${isUpd ? 'Updated' : 'Saved'} #${count}! (${item.tags.length} artist tags)`;
 
-            await chrome.storage.local.set({ scrapedCompetitorDesigns: updatedList });
+              renderScrapedDesignsList(updatedList);
 
-            const currentStoreCount = updatedList.filter(x =>
-              (x.store || "Independent Store").trim().toLowerCase() === storeName.toLowerCase()
-            ).length;
-
-            // Visual feedback
-            btnScrapeActiveTab.classList.add("grabbed-flash");
-            btnScrapeActiveTab.innerHTML = `<span class="btn-icon">✓</span> Saved #${updatedList.length}! (${item.tags.length} artist tags)`;
-
-            renderScrapedDesignsList(updatedList);
-
-            setTimeout(() => {
-              btnScrapeActiveTab.classList.remove("grabbed-flash");
-              btnScrapeActiveTab.disabled = false;
-              btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
-            }, 1800);
+              setTimeout(() => {
+                btnScrapeActiveTab.classList.remove("grabbed-flash");
+                btnScrapeActiveTab.disabled = false;
+                btnScrapeActiveTab.innerHTML = `<span class="btn-icon">📸</span> GRAB THIS LISTING & TAGS (1-CLICK)`;
+              }, 1800);
+            });
           } else {
             // Fallback: retry
             btnScrapeActiveTab.innerHTML = `<span class="btn-icon">⚠️</span> Retrying scrape...`;
@@ -521,7 +507,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!Array.isArray(item.tags) && Array.isArray(item.allTags)) {
         item.tags = item.allTags;
       }
-      const key = (item.url || item.title || "").trim().toLowerCase();
+      // Deduplicate strictly by canonical key, designId, or clean URL — NEVER by title!
+      const key = (item.canonicalKey || item.designId || (item.url ? item.url.split('?')[0].split('#')[0].replace(/\/+$/, '') : '') || item.id || '').trim().toLowerCase();
       if (key && !seen.has(key)) {
         seen.add(key);
         combined.push(item);
