@@ -139,7 +139,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (extensionToggle) {
     extensionToggle.addEventListener("change", async (e) => {
       const isEnabled = e.target.checked;
-      await chrome.storage.local.set({ extensionEnabled: isEnabled, pendingAutoList: false });
+      await chrome.storage.local.set({
+        extensionEnabled: isEnabled,
+        pendingAutoList: false,
+        autopilotSessionActive: false,
+        autopilotSessionTime: 0
+      });
       updateAutopilotToggleUI(isEnabled);
 
       // Broadcast toggle change to all open TeePublic tabs
@@ -902,11 +907,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const isTeePublic = Boolean(tab?.url && tab.url.includes("teepublic.com"));
     const isUploaderOrEdit = Boolean(tab?.url && (tab.url.includes("bulk_uploader") || (tab.url.includes("/designs/") && tab.url.includes("/edit"))));
 
+    const now = Date.now();
     await chrome.storage.local.set({
       batchCompleted: false,
       designIdMap: {},
       pendingAutoList: true,
-      triggeredByPopupTimestamp: Date.now(),
+      autopilotSessionActive: true,
+      autopilotSessionTime: now,
+      triggeredByPopupTimestamp: now,
       advanceNextAfterFill: advanceNext
     });
 
