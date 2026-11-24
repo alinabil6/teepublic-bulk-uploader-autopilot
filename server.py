@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from models import DesignItem, ValidationSummary, ColorPreference
 from csv_parser import parse_csv_file
-from file_matcher import match_designs_with_folder, IMAGE_EXTENSIONS
+from file_matcher import match_designs_with_folder, sync_canva_filenames, IMAGE_EXTENSIONS
 from automation import TeePublicAutomation, TEEPUBLIC_COLORS
 
 # Define 12 TeePublic products
@@ -623,6 +623,29 @@ def upload_single_image():
             state.add_log("SUCCESS", f"Imported {saved_count} artwork images.")
 
         return jsonify(state.to_dict())
+
+@app.route("/api/sync-canva-names", methods=["POST"])
+def sync_canva_names_route():
+    """
+    Syncs / restores Canva exported files (e.g. 1.png, 2.png) in the specified folder
+    to their full original filenames from the CSV listings (e.g. design_01_design-to-design.png).
+    """
+    data = request.get_json(silent=True) or {}
+    target_folder = data.get("folder") or state.folder_path or ARTWORK_DIR
+    if not os.path.isdir(target_folder):
+        return jsonify({"error": "Folder does not exist", "folder": target_folder}), 400
+
+    with state.lock:
+        res = sync_canva_filenames(state.designs, target_folder)
+        execute_matching()
+        state.add_log("SUCCESS", f"Canva Name Sync: Renamed {res['renamed_count']} file(s) to original CSV names.")
+        return jsonify({
+            "status": "success",
+            "renamed_count": res["renamed_count"],
+            "renamed_files": res["renamed_files"],
+            "errors": res["errors"],
+            "state": state.to_dict()
+        })
 
 @app.route("/api/apply-color-preset", methods=["POST"])
 def apply_color_preset():
